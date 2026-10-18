@@ -7,7 +7,11 @@
 #   .\run.ps1 -Setup     boots OS 3.2 and leaves it open, E-UAE not started -
 #                        for setting the Workbench's ScreenMode (an RTG one: E-UAE
 #                        draws the card's picture with cybergraphics) and saving it
-param([int]$Seconds = 420, [ValidateSet('old', 'os32')][string]$Card = 'old', [switch]$Keep, [switch]$Setup)
+#   .\run.ps1 -Workbench [-WbMode 0x50041303 -WbWidth 800 -WbHeight 600 -WbDepth 24]
+#                        the emulated Amiga boots to Workbench on that uaegfx mode
+#                        (written as its screenmode.prefs) instead of running rtgtest
+param([int]$Seconds = 420, [ValidateSet('old', 'os32')][string]$Card = 'old', [switch]$Keep, [switch]$Setup,
+      [switch]$Workbench, [uint32]$WbMode = 0x50041303, [int]$WbWidth = 800, [int]$WbHeight = 600, [int]$WbDepth = 24)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $share = "$root\share"
@@ -26,6 +30,9 @@ $lines = @('Echo autorun-start >DIZ:boot.txt', 'FailAt 30', 'Wait 10',
 foreach ($d in 'C', 'L', 'Libs', 'Devs', 'Fonts') { $lines += "  Copy SYS:$d $g/$d ALL CLONE QUIET" }
 $lines += "  Copy SYS:Prefs/Env-Archive $g/Prefs/Env-Archive ALL CLONE QUIET",
     'ENDIF',
+    "IF NOT EXISTS $g/Locale",          # Workbench asks for LOCALE: without it
+    "  Copy SYS:Locale $g/Locale ALL CLONE QUIET",
+    'ENDIF',
     "IF EXISTS $g/Libs/Picasso96/uaegfx.card",
     "  IF NOT EXISTS $g/Libs/Picasso96/uaegfx.card.os32",
     "    Copy $g/Libs/Picasso96/uaegfx.card $g/Libs/Picasso96/uaegfx.card.os32",
@@ -33,8 +40,25 @@ $lines += "  Copy SYS:Prefs/Env-Archive $g/Prefs/Env-Archive ALL CLONE QUIET",
     'ENDIF'
 if ($Card -eq 'old') { $lines += "Copy DIZ:guest/p96/Picasso96Install/Libs/Picasso96/uaegfx.card $g/Libs/Picasso96/uaegfx.card" }
 else { $lines += "Copy $g/Libs/Picasso96/uaegfx.card.os32 $g/Libs/Picasso96/uaegfx.card" }
-$lines += "Copy DIZ:guest/Startup-Sequence $g/S/Startup-Sequence",
-    "Copy DIZ:guest/rtgtest $g/C/rtgtest",
+if ($Workbench) {
+    # ENVARC:Sys/screenmode.prefs: FORM PREF, PRHD (6 bytes), SCRM (16 reserved, DisplayID,
+    # Width, Height, Depth, Control = SMF_AUTOSCROLL), big-endian
+    $ms = New-Object IO.MemoryStream
+    $bw = New-Object IO.BinaryWriter($ms)
+    function BE32($v) { $b = [BitConverter]::GetBytes([uint32]$v); [Array]::Reverse($b); $bw.Write($b) }
+    function BE16($v) { $b = [BitConverter]::GetBytes([uint16]$v); [Array]::Reverse($b); $bw.Write($b) }
+    $bw.Write([Text.Encoding]::ASCII.GetBytes('FORM')); BE32 54; $bw.Write([Text.Encoding]::ASCII.GetBytes('PREF'))
+    $bw.Write([Text.Encoding]::ASCII.GetBytes('PRHD')); BE32 6; $bw.Write([byte[]](0, 0, 0, 0, 0, 0))
+    $bw.Write([Text.Encoding]::ASCII.GetBytes('SCRM')); BE32 28; $bw.Write((New-Object byte[] 16))
+    BE32 $WbMode; BE16 $WbWidth; BE16 $WbHeight; BE16 $WbDepth; BE16 1
+    $bw.Flush(); [IO.File]::WriteAllBytes("$share\guest\screenmode.prefs", $ms.ToArray())
+    $lines += "Copy DIZ:guest/Startup-Sequence.wb $g/S/Startup-Sequence",
+        "MakeDir $g/Prefs/Env-Archive/Sys >NIL:",
+        "Copy DIZ:guest/screenmode.prefs $g/Prefs/Env-Archive/Sys/screenmode.prefs"
+} else {
+    $lines += "Copy DIZ:guest/Startup-Sequence $g/S/Startup-Sequence"
+}
+$lines += "Copy DIZ:guest/rtgtest $g/C/rtgtest",
     "List $g/Devs/Monitors $g/Libs/Picasso96 >DIZ:monitors.txt",
     'Echo e-uae-start >>DIZ:boot.txt',
     'SetEnv EUAE_LOG DIZ:euae.log',
@@ -60,7 +84,7 @@ $t0 = Get-Date
 $guestLog = "$share\guest\sys\guest.log"
 while (((Get-Date) - $t0).TotalSeconds -lt $Seconds) {
     Start-Sleep -Seconds 5
-    if ((Test-Path $guestLog) -and (Select-String $guestLog -Pattern 'rtgtest returned' -Quiet)) { Start-Sleep -Seconds 3; break }
+    if ((Test-Path $guestLog) -and (Select-String $guestLog -Pattern 'rtgtest returned|workbench up' -Quiet)) { Start-Sleep -Seconds 3; break }
     if (Test-Path "$share\done.txt") { break }
 }
 "elapsed $([int]((Get-Date) - $t0).TotalSeconds) s"

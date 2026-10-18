@@ -3195,6 +3195,7 @@ void LED (int on)
  * to handle_events like the other display changes (pending_p96).
  */
 
+extern uae_u32 gfxmem_start, allocated_gfxmem;  /* the card's memory (memory.h) */
 static uae_u32 *p96buf;                 /* the card's picture, ARGB */
 static int p96buf_w, p96buf_h;          /* ... its size */
 static int p96_dirty_first = -1, p96_dirty_last = -1;
@@ -3268,7 +3269,76 @@ static void p96_sample (void)
                    (unsigned long) row[9 * p96buf_w / 16], (unsigned long) row[11 * p96buf_w / 16],
                    (unsigned long) row[13 * p96buf_w / 16], (unsigned long) row[15 * p96buf_w / 16]);
     }
+    if (frames == 500) {
+        /* both pictures as raw files next to the log: ours (ARGB, p96buf_w x
+           p96buf_h) and the card's framebuffer as the emulated Amiga has it */
+        extern uae_u32 gfxmem_start;            /* expansion.c (memory.h) */
+        char name[300], *p;
+        FILE *f;
+        GetVar ("EUAE_LOG", name, sizeof name - 40, 0);
+        p = name + strlen (name);
+        while (p > name && p[-1] != '/' && p[-1] != ':') p--;
+        strcpy (p, "p96host.raw");
+        if ((f = fopen (name, "wb"))) {
+            fwrite (p96buf, 4, (size_t) p96buf_w * p96buf_h, f);
+            fclose (f);
+        }
+        strcpy (p, "p96card.raw");
+        if ((f = fopen (name, "wb"))) {
+            fwrite (gfxmemory + (picasso96_state.Address - gfxmem_start), 1,
+                    (size_t) picasso96_state.BytesPerRow * picasso96_state.Height, f);
+            fclose (f);
+        }
+        write_log ("P96: dumped p96host.raw (%dx%d ARGB) and p96card.raw (%d bytes a row, %d rows, format %d)\n",
+                   p96buf_w, p96buf_h, (int) picasso96_state.BytesPerRow, (int) picasso96_state.Height,
+                   (int) picasso96_state.RGBFormat);
+    }
 #endif
+}
+
+/* The changed lines, straight from the card's framebuffer in the emulated
+ * Amiga's memory into p96buf (ARGB): BGRA byte-swapped, 8-bit through the
+ * CLUT. picasso96.c's own copies into a second buffer (extra_mem) go
+ * through many partial paths written for little-endian hosts, and on this
+ * one they left pixels shifted and bytes mixed; the framebuffer itself is
+ * always right, and every path reports the lines it touched. */
+static void p96_convert (int first, int last)
+{
+    uaecptr base = picasso96_state.Address;
+    int bpr = picasso96_state.BytesPerRow, w = picasso96_state.Width, y;
+    int fmt = (int) picasso96_state.RGBFormat;
+    int bpp = picasso96_state.BytesPerPixel;
+    const uae_u8 *fb;
+
+    if (!base || !gfxmemory || bpr <= 0 || base < gfxmem_start)
+        return;
+    fb = gfxmemory + (base - gfxmem_start) + picasso96_state.YOffset * bpr
+         + picasso96_state.XOffset * bpp;
+    if (w > p96buf_w) w = p96buf_w;
+    if (last >= picasso96_state.Height) last = picasso96_state.Height - 1;
+    if ((uae_u32) ((fb - gfxmemory) + (last + 1) * bpr) > allocated_gfxmem)
+        return;                                 /* not all of it in the card's memory */
+
+    for (y = first; y <= last; y++) {
+        const uae_u8 *s = fb + y * bpr;
+        uae_u32 *d = p96buf + y * p96buf_w;
+        int x;
+        switch (fmt) {
+            case RGBFB_CLUT:
+                for (x = 0; x < w; x++)
+                    d[x] = picasso_vidinfo.clut[s[x]];
+                break;
+            case RGBFB_B8G8R8A8:                /* the bytes B, G, R, A */
+                for (x = 0; x < w; x++, s += 4)
+                    d[x] = (uae_u32) s[2] << 16 | (uae_u32) s[1] << 8 | s[0];
+                break;
+            case RGBFB_A8R8G8B8:                /* A, R, G, B: ours already */
+                memcpy (d, s, w * 4);
+                break;
+            default:                            /* not offered */
+                break;
+        }
+    }
 }
 
 /* each frame: the changed lines to the window */
@@ -3298,6 +3368,7 @@ static void p96_flush (void)
     p96_dirty_first = p96_dirty_last = -1;
     if (w <= 0 || first > last)
         return;
+    p96_convert (first, last);
     WritePixelArray (p96buf, 0, first, p96buf_w * 4, RP,
                      x0, y0 + first, w, last - first + 1, RECTFMT_ARGB);
 }
@@ -3337,41 +3408,19 @@ void DX_SetPalette_vsync (void)
 {
 }
 
+/* Fills and blits: picasso96.c has done them in the card's framebuffer
+   already; returning 0 makes it just report the lines (extra_mem is 0) and
+   p96_convert picks them up from there */
 int DX_Fill (int dstx, int dsty, int width, int height, uae_u32 color, RGBFTYPE rgbtype)
 {
-    int y;
-    (void) rgbtype;
-    if (!p96buf || dstx < 0 || dsty < 0 || width <= 0 || height <= 0 ||
-        dstx + width > p96buf_w || dsty + height > p96buf_h)
-        return 0;
-    for (y = dsty; y < dsty + height; y++) {
-        uae_u32 *p = p96buf + y * p96buf_w + dstx;
-        int x;
-        for (x = 0; x < width; x++)
-            p[x] = color;
-    }
-    DX_Invalidate (dsty, dsty + height - 1);
-    return 1;
+    (void) dstx; (void) dsty; (void) width; (void) height; (void) color; (void) rgbtype;
+    return 0;
 }
 
 int DX_Blit (int srcx, int srcy, int dstx, int dsty, int width, int height, BLIT_OPCODE opcode)
 {
-    int y;
-    if (opcode != BLIT_SRC || !p96buf || width <= 0 || height <= 0 ||
-        srcx < 0 || srcy < 0 || dstx < 0 || dsty < 0 ||
-        srcx + width > p96buf_w || dstx + width > p96buf_w ||
-        srcy + height > p96buf_h || dsty + height > p96buf_h)
-        return 0;
-    if (dsty <= srcy)                   /* overlapping: in the safe direction */
-        for (y = 0; y < height; y++)
-            memmove (p96buf + (dsty + y) * p96buf_w + dstx,
-                     p96buf + (srcy + y) * p96buf_w + srcx, width * 4);
-    else
-        for (y = height - 1; y >= 0; y--)
-            memmove (p96buf + (dsty + y) * p96buf_w + dstx,
-                     p96buf + (srcy + y) * p96buf_w + srcx, width * 4);
-    DX_Invalidate (dsty, dsty + height - 1);
-    return 1;
+    (void) srcx; (void) srcy; (void) dstx; (void) dsty; (void) width; (void) height; (void) opcode;
+    return 0;
 }
 
 /* the card's modes: each size as 8-bit and as 32-bit */
@@ -3400,8 +3449,8 @@ int DX_FillResolutions (uae_u16 *ppixel_format)
 
     picasso_vidinfo.rgbformat = RGBFB_A8R8G8B8;     /* our buffer: ARGB in memory order */
     picasso_vidinfo.pixbytes  = 4;
-    picasso_vidinfo.extra_mem = 1;      /* it's a second buffer: picasso96.c copies the card's
-                                           memory into it (redraws, blits, the CPU's writes) */
+    picasso_vidinfo.extra_mem = 0;      /* picasso96.c only reports changed lines; p96_convert
+                                           copies them from the card's framebuffer itself */
     *ppixel_format = RGBFF_A8R8G8B8 | RGBFF_CHUNKY;
 
     for (i = 0; i < sizeof sizes / sizeof sizes[0]; i++)

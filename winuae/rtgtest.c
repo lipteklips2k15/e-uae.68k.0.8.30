@@ -97,12 +97,38 @@ static void list_modes(void)
     printf("rtgtest: %d uaegfx modes\n", n);
 }
 
+/* WBINFO: the Workbench screen as it came up - its mode, size, depth */
+static int wb_info(void)
+{
+    struct Screen *s = LockPubScreen((STRPTR)"Workbench");
+    struct NameInfo ni;
+    ULONG id;
+    if (!s) {
+        printf("rtgtest: FAIL no Workbench screen\n");
+        return 10;
+    }
+    id = GetVPModeID(&s->ViewPort);
+    ni.Name[0] = 0;
+    GetDisplayInfoData(NULL, (UBYTE *)&ni, sizeof ni, DTAG_NAME, id);
+    printf("rtgtest: Workbench screen %ux%u, depth %u, mode $%08lx \"%s\"\n",
+           (unsigned)s->Width, (unsigned)s->Height,
+           (unsigned)GetBitMapAttr(s->RastPort.BitMap, BMA_DEPTH),
+           (unsigned long)id, (char *)ni.Name);
+    UnlockPubScreen(NULL, s);
+    return 0;
+}
+
 int main(void)
 {
-    LONG args[1] = { 0 };
-    struct RDArgs *rd = ReadArgs((STRPTR)"SECONDS/N", args, NULL);
+    LONG args[2] = { 0 };
+    struct RDArgs *rd = ReadArgs((STRPTR)"SECONDS/N,WBINFO/S", args, NULL);
     unsigned long secs = args[0] ? *(LONG *)args[0] : 10;
     int ok;
+    if (args[1]) {
+        ok = wb_info();
+        if (rd) FreeArgs(rd);
+        return ok;
+    }
     list_modes();
     ok = one_screen(640, 480, 8, secs);
     ok &= one_screen(800, 600, 24, secs);

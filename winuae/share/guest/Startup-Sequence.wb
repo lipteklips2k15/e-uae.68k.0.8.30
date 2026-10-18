@@ -1,0 +1,22 @@
+; The Amiga inside E-UAE, to Workbench on the uaegfx card: a minimal OS 3.2
+; startup. Steps go to SYS:guest.log (DIZ:guest/sys/guest.log outside).
+C:SetPatch QUIET
+Echo "guest: booted" >SYS:guest.log
+C:MakeDir RAM:T RAM:ENV RAM:Clipboards >NIL:
+Assign T: RAM:T
+Assign ENV: RAM:ENV
+Assign CLIPS: RAM:Clipboards
+Assign ENVARC: SYS:Prefs/Env-Archive
+Assign LOCALE: SYS:Locale
+Copy >NIL: ENVARC: RAM:ENV ALL NOREQ
+C:List >NIL: DEVS:Monitors/~(#?.info) TO T:M LFORMAT "DEVS:Monitors/%s"
+C:Execute T:M
+Echo "guest: monitors loaded" >>SYS:guest.log
+C:IPrefs
+Echo "guest: IPrefs done" >>SYS:guest.log
+C:LoadWB
+Echo "guest: LoadWB done" >>SYS:guest.log
+C:Wait 5
+C:rtgtest WBINFO >>SYS:guest.log
+Echo "guest: workbench up" >>SYS:guest.log
+EndCLI >NIL:

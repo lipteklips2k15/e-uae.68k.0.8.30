@@ -62,6 +62,9 @@ int p96hack_vpos, p96hack_vpos2, p96refresh_active;
 #define P96TRACING_ENABLED 0
 #if P96TRACING_ENABLED
 #define P96TRACE(x)	do { write_log x; } while(0)
+#elif defined P96_DEBUG
+/* make EXTRA=-DP96_DEBUG: each trace point's first four calls only */
+#define P96TRACE(x)	do { static int n_; if (n_ < 4) { n_++; write_log x; } } while(0)
 #else
 #define P96TRACE(x)     do { ; } while(0)
 #endif
@@ -783,8 +786,18 @@ static void flush_currline (void)
 
 	    if (first_byte < 0) {
 		byte_count += first_byte;
-		srcp       += first_byte;
+		srcp       -= first_byte;
 		first_byte = 0;
+	    }
+	    /* Whole pixels: a byte or word written into a pixel of 2 or 4
+	     * bytes must still copy the pixel (the argb32 hack byte-swaps a
+	     * long at a time, and drops anything under 4 bytes) */
+	    if (fb_bpp > 1) {
+		int mis = first_byte % fb_bpp;
+		first_byte -= mis;
+		srcp       -= mis;
+		byte_count += mis;
+		byte_count  = (byte_count + fb_bpp - 1) / fb_bpp * fb_bpp;
 	    }
 	    if ((first_byte + byte_count) > (picasso96_state.Width * fb_bpp))
 		byte_count = picasso96_state.Width * fb_bpp - first_byte;
