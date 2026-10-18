@@ -61,6 +61,9 @@ void write_log (const char *fmt, ...)
 	fprintf (logfile ? logfile : stderr, fmt, x1, x2, x3, x4, x5, x6, x7, x8);
     }
 #endif
+    va_end (ap);
+    if (logfile)
+	fflush (logfile);   /* a log file is read after a crash or a kill too */
 }
 
 void flush_log (void)

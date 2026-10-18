@@ -1,0 +1,10 @@
+# The test rig's private and copyrighted bits stay out of git
+*.hdf
+share/uae
+share/S/
+share/guest/kick.rom
+share/guest/p96/
+share/guest/sys/
+share/guest/rtgtest
+share/*.txt
+share/*.log

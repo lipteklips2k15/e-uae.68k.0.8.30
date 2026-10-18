@@ -699,7 +699,7 @@ static uae_u32 fetched_aga1[MAX_PLANES];
 
 /* Expansions from bplcon0/bplcon1.  */
 static int toscr_res, toscr_nr_planes, fetchwidth;
-static int toscr_delay1, toscr_delay2;
+static int toscr_delay1x, toscr_delay2x, toscr_delay1, toscr_delay2;
 
 /* The number of bits left from the last fetched words.
    This is an optimization - conceptually, we have to make sure the result is

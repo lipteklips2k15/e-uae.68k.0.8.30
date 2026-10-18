@@ -9,3 +9,4 @@
 
 #define GFX_NAME "amiga"
 #define USE_AMIGA_GFX
+#define PICASSO96_SUPPORTED     /* the emulated graphics card (ami-win.c draws it) */

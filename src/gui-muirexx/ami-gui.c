@@ -394,6 +394,20 @@ void gui_fps (int fps, int idle)
 
 /****************************************************************************/
 
+/*
+ * ami-win.c expects the native GadTools GUI (gui_toggle/gui_screen_open),
+ * which is not part of this source tree. Provide inert versions so the
+ * Ctrl+LAlt+B hotkey is harmless.
+ */
+int gui_screen_open = 0;
+
+void gui_toggle (void)
+{
+    write_log ("GUI: native GUI not built in; Ctrl+LAlt+B ignored\n");
+}
+
+/****************************************************************************/
+
 void gui_display (int shortcut)
 {
     switch (shortcut) {

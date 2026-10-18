@@ -1,0 +1,15 @@
+use_gui=no
+kickstart_rom_file=DIZ:guest/kick.rom
+cpu_type=68040
+cpu_24bit_addressing=no
+cpu_compatible=no
+cpu_speed=max
+chipset=aga
+chipmem_size=4
+fastmem_size=0
+z3mem_size=16
+gfxcard_size=16
+sound_output=none
+joyport0=mouse
+filesystem2=rw,DH0:GuestSys:DIZ:guest/sys,0
+amiga.screen_type=public

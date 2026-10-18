@@ -764,6 +764,16 @@ static int pending_toggle_res = 0;  /* deferred toggle_lores */
 static int pending_screenmode = 0;  /* deferred screenmode requester */
 static int force_screenmode_req = 0; /* set to bypass get_displayid in setup_userscreen */
 
+#ifdef PICASSO96
+/* The emulated graphics card (uaegfx, picasso96.c): its picture goes into
+ * p96buf, 32-bit ARGB, and from there to the window each frame. */
+static int pending_p96 = 0;         /* deferred: the window for RTG on or off */
+static int screen_is_picasso = 0;   /* the window shows the card, not the chipset */
+static void p96_flush (void);
+static void p96_invalidate_all (void);
+static void do_p96_display (void);
+#endif
+
 /* Pause-on-focus-loss feature.
  * Set ami_pause_focus_loss=1 before entering ami_pause_loop() via
  * IDCMP_INACTIVEWINDOW so the loop auto-resumes on IDCMP_ACTIVEWINDOW.
@@ -2830,7 +2840,17 @@ void handle_events(void)
         pending_resize = 0;
         close_display ();
         open_display ();
+#ifdef PICASSO96
+        p96_invalidate_all ();
+#endif
     }
+#ifdef PICASSO96
+    else if (pending_p96) {
+        pending_p96 = 0;
+        do_p96_display ();
+    }
+    p96_flush ();                       /* the card's changed lines to the window */
+#endif
 
     /* this function is called at each frame, so: */
     ++frame_num;       /* increase frame counter */
@@ -2879,6 +2899,14 @@ void handle_events(void)
                     break;
 
                 case IDCMP_REFRESHWINDOW:
+#ifdef PICASSO96
+                    if (screen_is_picasso) {
+                        BeginRefresh (W);
+                        EndRefresh (W, TRUE);
+                        p96_invalidate_all ();  /* redrawn at the frame's end */
+                        break;
+                    }
+#endif
                     if (use_delta_buffer) {
                         /* hack: this forces refresh */
                         uae_u8 *ptr = oldpixbuf;
@@ -3149,100 +3177,304 @@ void LED (int on)
 /* sam: need to put all this in a separate module */
 
 #ifdef PICASSO96
+/*
+ * The emulated graphics card's side of the display (uaegfx in the emulated
+ * Amiga, picasso96.c in the emulator).
+ *
+ * picasso96.c draws the card's picture into a buffer of ours (gfx_lock_picasso)
+ * in the host's pixel format, and says which lines changed (DX_Invalidate).
+ * Ours is 32-bit ARGB in memory order - RGBFB_A8R8G8B8; picasso96.c then
+ * offers the emulated Amiga BGRA and byte-swaps (its "argb32 hack") - and
+ * 8-bit modes, whose pens it turns into ARGB through picasso_vidinfo.clut
+ * (DX_SetPalette). Each frame p96_flush puts the changed lines in the window
+ * with WritePixelArray (RECTFMT_ARGB), so the host needs an RTG screen
+ * (cybergraphics.library: Picasso96 or CGX). While the card is shown the
+ * chipset's picture is held (drawing.c: IHF_PICASSO).
+ *
+ * Switching between the two reopens the display at the other size, deferred
+ * to handle_events like the other display changes (pending_p96).
+ */
 
-#include <stdio.h>   /* snprintf */
+static uae_u32 *p96buf;                 /* the card's picture, ARGB */
+static int p96buf_w, p96buf_h;          /* ... its size */
+static int p96_dirty_first = -1, p96_dirty_last = -1;
+static int p96_saved_dw;                /* the window was switched to the card's size */
+static int p96_sample_req;              /* log the picture's colours a second from now */
 
-/* Provided by picasso96.c / picasso96.h in your tree */
-extern struct PicassoResolution DisplayModes[];
-
-/* Provided by picasso96.c (type from picasso96.h already included above) */
-extern struct picasso_vidbuf_description picasso_vidinfo;
-
-static int add_mode(int *count, int w, int h, int bpp_bytes, int refresh, const char *label)
+static void p96_alloc (int w, int h)
 {
-    if (*count >= MAX_PICASSO_MODES)
+    if (p96buf && p96buf_w == w && p96buf_h == h)
+        return;
+    if (p96buf)
+        FreeVec (p96buf);
+    p96buf = AllocVec ((ULONG) w * h * 4, MEMF_ANY | MEMF_CLEAR);
+    p96buf_w = p96buf ? w : 0;
+    p96buf_h = p96buf ? h : 0;
+    if (!p96buf)
+        write_log ("P96: no memory for a %dx%d picture\n", w, h);
+}
+
+static void p96_invalidate_all (void)
+{
+    if (p96buf_h > 0) {
+        p96_dirty_first = 0;
+        p96_dirty_last  = p96buf_h - 1;
+    }
+}
+
+static unsigned long p96_invalidations;     /* for the log: changed-line reports */
+
+void DX_Invalidate (int first, int last)
+{
+    if (first > last || !p96buf)
+        return;
+    p96_invalidations++;
+    if (first < 0) first = 0;
+    if (last >= p96buf_h) last = p96buf_h - 1;
+    if (p96_dirty_first < 0 || first < p96_dirty_first) p96_dirty_first = first;
+    if (last > p96_dirty_last) p96_dirty_last = last;
+}
+
+/* for the log (make EXTRA=-DP96_DEBUG): a look at the card's state and the
+   picture, eight samples across the middle line, 1, 3 and 10 s after each
+   mode switch */
+static void p96_sample (void)
+{
+#ifdef P96_DEBUG
+    static int frames = -1;
+    static unsigned long inv0;
+    if (p96_sample_req) {
+        p96_sample_req = 0;
+        frames = 0;
+        inv0 = p96_invalidations;
+    }
+    if (frames < 0 || !p96buf)
+        return;
+    frames++;
+    if (frames == 50 || frames == 150 || frames == 500) {
+        const uae_u32 *row = p96buf + (p96buf_h / 2 + 16) * p96buf_w;
+        write_log ("P96: after %d frames (%lu line reports): Address %08lx BytesPerRow %d %dx%d"
+                   " virtual %dx%d at %d,%d format %d\n",
+                   frames, p96_invalidations - inv0, (unsigned long) picasso96_state.Address,
+                   (int) picasso96_state.BytesPerRow,
+                   (int) picasso96_state.Width, (int) picasso96_state.Height,
+                   (int) picasso96_state.VirtualWidth, (int) picasso96_state.VirtualHeight,
+                   (int) picasso96_state.XOffset, (int) picasso96_state.YOffset,
+                   (int) picasso96_state.RGBFormat);
+        write_log ("P96: %dx%d samples %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
+                   p96buf_w, p96buf_h,
+                   (unsigned long) row[1 * p96buf_w / 16], (unsigned long) row[3 * p96buf_w / 16],
+                   (unsigned long) row[5 * p96buf_w / 16], (unsigned long) row[7 * p96buf_w / 16],
+                   (unsigned long) row[9 * p96buf_w / 16], (unsigned long) row[11 * p96buf_w / 16],
+                   (unsigned long) row[13 * p96buf_w / 16], (unsigned long) row[15 * p96buf_w / 16]);
+    }
+#endif
+}
+
+/* each frame: the changed lines to the window */
+static void p96_flush (void)
+{
+    int x0, y0, w, h, first, last;
+
+    if (screen_is_picasso)
+        p96_sample ();
+    if (!screen_is_picasso || !p96buf || p96_dirty_first < 0 || !W || !RP || !CyberGfxBase)
+        return;
+    if (usepub) {
+        x0 = W->BorderLeft;
+        y0 = W->BorderTop;
+        w  = W->Width  - W->BorderLeft - W->BorderRight;
+        h  = W->Height - W->BorderTop  - W->BorderBottom;
+    } else {                            /* a screen of its own: in the middle */
+        x0 = W->Width  > p96buf_w ? (W->Width  - p96buf_w) / 2 : 0;
+        y0 = W->Height > p96buf_h ? (W->Height - p96buf_h) / 2 : 0;
+        w  = W->Width  - x0;
+        h  = W->Height - y0;
+    }
+    if (w > p96buf_w) w = p96buf_w;
+    if (h > p96buf_h) h = p96buf_h;
+    first = p96_dirty_first;
+    last  = p96_dirty_last < h - 1 ? p96_dirty_last : h - 1;
+    p96_dirty_first = p96_dirty_last = -1;
+    if (w <= 0 || first > last)
+        return;
+    WritePixelArray (p96buf, 0, first, p96buf_w * 4, RP,
+                     x0, y0 + first, w, last - first + 1, RECTFMT_ARGB);
+}
+
+int DX_BitsPerCannon (void)
+{
+    return 8;
+}
+
+/* 8-bit modes: the pens as ARGB, for picasso96.c's chunky-to-ARGB copies */
+void DX_SetPalette (int start, int count)
+{
+    if (picasso96_state.RGBFormat != RGBFB_CHUNKY)
+        return;
+#ifdef P96_DEBUG
+    {
+        static int logged;
+        if (logged < 40) {              /* the first few, for the log */
+            logged++;
+            write_log ("P96: palette %d-%d, first %02x%02x%02x\n", start, start + count - 1,
+                       picasso96_state.CLUT[start].Red, picasso96_state.CLUT[start].Green,
+                       picasso96_state.CLUT[start].Blue);
+        }
+    }
+#endif
+    while (count-- > 0 && start < 256) {
+        picasso_vidinfo.clut[start] = (uae_u32) picasso96_state.CLUT[start].Red << 16
+                                    | (uae_u32) picasso96_state.CLUT[start].Green << 8
+                                    | (uae_u32) picasso96_state.CLUT[start].Blue;
+        start++;
+    }
+    /* what's drawn already has the old colours: picasso96.c redraws on
+       SetColorArray; whatever it doesn't, the next full refresh does */
+}
+
+void DX_SetPalette_vsync (void)
+{
+}
+
+int DX_Fill (int dstx, int dsty, int width, int height, uae_u32 color, RGBFTYPE rgbtype)
+{
+    int y;
+    (void) rgbtype;
+    if (!p96buf || dstx < 0 || dsty < 0 || width <= 0 || height <= 0 ||
+        dstx + width > p96buf_w || dsty + height > p96buf_h)
         return 0;
-
-    DisplayModes[*count].res.width  = w;
-    DisplayModes[*count].res.height = h;
-
-    /* PicassoResolution.depth is BYTES-per-pixel in E-UAE/Picasso96 integration */
-    DisplayModes[*count].depth      = bpp_bytes; /* 1,2,3,4 */
-
-    /* If your struct has refresh, keep it; most trees do. */
-    DisplayModes[*count].refresh    = refresh ? refresh : 60;
-
-    /* IMPORTANT: name MUST contain a comma, picasso96.c parses up to ',' */
-    snprintf(DisplayModes[*count].name, sizeof(DisplayModes[*count].name),
-             "%dx%d,%s", w, h, (label && *label) ? label : "rtg");
-
-    (*count)++;
+    for (y = dsty; y < dsty + height; y++) {
+        uae_u32 *p = p96buf + y * p96buf_w + dstx;
+        int x;
+        for (x = 0; x < width; x++)
+            p[x] = color;
+    }
+    DX_Invalidate (dsty, dsty + height - 1);
     return 1;
+}
+
+int DX_Blit (int srcx, int srcy, int dstx, int dsty, int width, int height, BLIT_OPCODE opcode)
+{
+    int y;
+    if (opcode != BLIT_SRC || !p96buf || width <= 0 || height <= 0 ||
+        srcx < 0 || srcy < 0 || dstx < 0 || dsty < 0 ||
+        srcx + width > p96buf_w || dstx + width > p96buf_w ||
+        srcy + height > p96buf_h || dsty + height > p96buf_h)
+        return 0;
+    if (dsty <= srcy)                   /* overlapping: in the safe direction */
+        for (y = 0; y < height; y++)
+            memmove (p96buf + (dsty + y) * p96buf_w + dstx,
+                     p96buf + (srcy + y) * p96buf_w + srcx, width * 4);
+    else
+        for (y = height - 1; y >= 0; y--)
+            memmove (p96buf + (dsty + y) * p96buf_w + dstx,
+                     p96buf + (srcy + y) * p96buf_w + srcx, width * 4);
+    DX_Invalidate (dsty, dsty + height - 1);
+    return 1;
+}
+
+/* the card's modes: each size as 8-bit and as 32-bit */
+static void add_p96_mode (int w, int h, int *count)
+{
+    int i;
+    for (i = 0; i < 2; i++) {
+        if (*count >= MAX_PICASSO_MODES)
+            return;
+        DisplayModes[*count].res.width  = w;
+        DisplayModes[*count].res.height = h;
+        DisplayModes[*count].depth      = i ? 4 : 1;    /* bytes a pixel */
+        DisplayModes[*count].refresh    = 60;
+        (*count)++;
+    }
 }
 
 int DX_FillResolutions (uae_u16 *ppixel_format)
 {
-    write_log("P96: DX_FillResolutions ENTER\n");
+    static const int sizes[][2] = {
+        {  640, 480 }, {  800, 600 }, { 1024, 768 }, { 1152, 864 },
+        { 1280, 720 }, { 1280, 1024 }, { 1440, 900 }, { 1600, 1200 }, { 1920, 1080 }
+    };
     int count = 0;
+    unsigned int i;
 
-    /* picasso96.c wants something sane here; never leave it 0 */
-    if (ppixel_format)
-        *ppixel_format = RGBFF_CHUNKY;
+    picasso_vidinfo.rgbformat = RGBFB_A8R8G8B8;     /* our buffer: ARGB in memory order */
+    picasso_vidinfo.pixbytes  = 4;
+    picasso_vidinfo.extra_mem = 1;      /* it's a second buffer: picasso96.c copies the card's
+                                           memory into it (redraws, blits, the CPU's writes) */
+    *ppixel_format = RGBFF_A8R8G8B8 | RGBFF_CHUNKY;
 
-    /* Minimal fallback modes to prove the pipeline works */
-    add_mode(&count,  640,  480, 2, 60, "16bit");
-    add_mode(&count,  640,  480, 4, 60, "32bit");
-
-    add_mode(&count,  800,  600, 2, 60, "16bit");
-    add_mode(&count,  800,  600, 4, 60, "32bit");
-
-    add_mode(&count, 1024,  768, 2, 60, "16bit");
-    add_mode(&count, 1024,  768, 4, 60, "32bit");
-
-    /* Optional extras */
-    add_mode(&count, 1280,  720, 4, 60, "32bit");
-    add_mode(&count, 1280, 1024, 4, 60, "32bit");
-
+    for (i = 0; i < sizeof sizes / sizeof sizes[0]; i++)
+        add_p96_mode (sizes[i][0], sizes[i][1], &count);
+    write_log ("P96: %d modes, 8-bit and 32-bit\n", count);
+    p96_alloc (640, 480);               /* a picture from the start: not every lock checks */
     return count;
 }
 
-/*
- * Called by picasso96 when a mode is selected.
- * depth here is BYTES-per-pixel (1/2/3/4).
- */
-void gfx_set_picasso_modeinfo (int w, int h, int depth, RGBFTYPE rgbfmt)
+void gfx_set_picasso_modeinfo (int w, int h, int depth, int rgbfmt)
 {
-    if (w <= 0) w = 640;
-    if (h <= 0) h = 480;
-    if (depth <= 0) depth = 4;
-
+    write_log ("P96: mode %dx%d, %d bits, format %d\n", w, h, depth, rgbfmt);
     picasso_vidinfo.width    = w;
     picasso_vidinfo.height   = h;
-
-    picasso_vidinfo.pixbytes = depth;
-    picasso_vidinfo.pixbits  = depth * 8;
-
-    /* simplest safe stride */
-    picasso_vidinfo.rowbytes = w * depth;
-
-    picasso_vidinfo.rgbformat = rgbfmt;
-    /* TEMP: add logging so we know mode selection is happening */
-    write_log("P96: gfx_set_picasso_modeinfo %dx%d depth=%d rgbfmt=%d\n",
-              w, h, depth, (int)rgbfmt);
-
-    /* If your tree exposes picasso_vidinfo, set it here (in the file that owns it). */
+    picasso_vidinfo.depth    = depth;
+    picasso_vidinfo.pixbytes = 4;               /* ours, whatever the card's */
+    picasso_vidinfo.rowbytes = w * 4;
+    p96_alloc (w, h);
+    p96_invalidate_all ();
+    p96_sample_req = 1;
+    if (screen_is_picasso)
+        pending_p96 = 1;                        /* the window to the new size */
 }
 
-/*
- * Toggle RTG state. Minimal version: just remember the state.
- * If later you need to reopen screens/bitmaps, do it here.
- */
 void gfx_set_picasso_state (int on)
 {
-    static int p96_on = 0;
-    p96_on = on ? 1 : 0;
-    (void)p96_on;
-    write_log("P96: DX_FillResolutions returning %d modes\n", count);
+    write_log ("P96: the card's picture %s\n", on ? "on" : "off");
+    if (on == screen_is_picasso)
+        return;
+    screen_is_picasso = on;
+    if (on) {
+        if (picasso_vidinfo.width > 0)
+            p96_alloc (picasso_vidinfo.width, picasso_vidinfo.height);
+        p96_invalidate_all ();
+    }
+    pending_p96 = 1;                            /* the window, at the next handle_events */
+}
+
+/* handle_events, outside the message loop: the display at the card's size,
+ * or back at the chipset's */
+static void do_p96_display (void)
+{
+    if (screen_is_picasso) {
+        if (usepub && W) {
+            p96_saved_dw = 1;           /* the window is the card's size now */
+            display_w = p96buf_w;
+            display_h = p96buf_h;
+            close_display ();
+            if (!open_display ())
+                open_display ();
+        }
+        p96_invalidate_all ();
+    } else if (usepub && W && p96_saved_dw) {
+        /* back at the chipset's size: the one the LoRes toggle keeps (0 for
+           none yet: the prefs' window size) - not scale_x, which a
+           close_display() on the way may have reset to 1 */
+        display_w = last_display_w;
+        display_h = last_display_h;
+        p96_saved_dw = 0;
+        close_display ();
+        if (!open_display ())
+            open_display ();
+    }
+}
+
+uae_u8 *gfx_lock_picasso (void)
+{
+    picasso_vidinfo.rowbytes = p96buf_w * 4;
+    return (uae_u8 *) p96buf;
+}
+
+void gfx_unlock_picasso (void)
+{
 }
 
 #endif /* PICASSO96 */

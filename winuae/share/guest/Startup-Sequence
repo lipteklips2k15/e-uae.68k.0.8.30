@@ -1,0 +1,18 @@
+; The Amiga inside E-UAE: just enough to load Picasso96 and run rtgtest.
+; Every step goes to SYS:guest.log (DIZ:guest/sys/guest.log outside).
+C:SetPatch QUIET
+Echo "guest: booted" >SYS:guest.log
+C:MakeDir RAM:T RAM:ENV RAM:Clipboards >NIL:
+Assign T: RAM:T
+Assign ENV: RAM:ENV
+Assign CLIPS: RAM:Clipboards
+IF EXISTS SYS:Prefs/Env-Archive
+  Copy >NIL: SYS:Prefs/Env-Archive RAM:ENV ALL NOREQ
+ENDIF
+Assign ENVARC: SYS:Prefs/Env-Archive
+; the monitors, as OS 3.x's own startup does it - uaegfx among them
+C:List >NIL: DEVS:Monitors/~(#?.info) TO T:M LFORMAT "Echo *"guest: monitor %s*" >>SYS:guest.log*NDEVS:Monitors/%s"
+C:Execute T:M
+Echo "guest: monitors loaded" >>SYS:guest.log
+C:rtgtest SECONDS 25 >>SYS:guest.log
+Echo "guest: rtgtest returned" >>SYS:guest.log

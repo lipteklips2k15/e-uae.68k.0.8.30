@@ -20,6 +20,7 @@
 #define  __USE_BASETYPE__
 #include <proto/exec.h>
 #undef   __USE_BASETYPE__
+#include <proto/dos.h>                  /* GetVar */
 #include <exec/execbase.h>
 
 #ifdef USE_SDL
@@ -88,9 +89,15 @@ static FILE *logfile;
  */
 int main (int argc, char *argv[])
 {
+    static char logname[256];
+
     fromWB = argc == 0;
 
-    if (fromWB)
+    /* the log: the file the AmigaDOS variable EUAE_LOG names (SetEnv EUAE_LOG
+       RAM:uae.log), else T:E-UAE.log from Workbench, else the Shell's stderr */
+    if (GetVar ("EUAE_LOG", logname, sizeof logname, 0) > 0)
+	set_logfile (logname);
+    else if (fromWB)
 	set_logfile ("T:E-UAE.log");
 
     init_libs ();
@@ -101,8 +108,7 @@ int main (int argc, char *argv[])
 
     real_main (argc, argv);
 
-    if (fromWB)
-	set_logfile (0);
+    set_logfile (0);
 
     return 0;
 }

@@ -1,0 +1,91 @@
+# Cross-build E-UAE for AmigaOS 68k with bebbo's amiga-gcc (clib2 runtime).
+#
+#   make -f Makefile.amiga            (uses m68k-amigaos-gcc from PATH)
+#   make -f Makefile.amiga -j8
+#
+# Replaces the autotools build for this target; feature defines mirror what
+# configure.in selects for od-amiga.
+
+CC      = m68k-amigaos-gcc
+AR      = m68k-amigaos-ar
+STRIP   = m68k-amigaos-strip
+
+CPUFLAGS = -mcrt=clib2 -m68060 -m68881
+OPTFLAGS = -Ofast -ffast-math -fomit-frame-pointer
+CFLAGS   = $(CPUFLAGS) $(OPTFLAGS) -w $(EXTRA)  # make EXTRA=-DP96_DEBUG: the RTG card's log lines
+
+DEFINES = -DFPUEMU -DCPUEMU_0 -DCPUEMU_5 -DCPUEMU_6 \
+          -DAGA -DAUTOCONFIG -DFILESYS -DSUPPORT_THREADS \
+          -DFDI2RAW -DDEBUGGER -DSAVESTATE -DENFORCER -DACTION_REPLAY \
+          -DUNALIGNED_PROFITABLE -DREGPARAM= \
+          -DHAVE_VFPRINTF
+
+INCLUDES = -Isrc/include -Isrc -I. -Izlib
+
+OBJDIR = obj
+TARGET = uae
+
+CORE = main newcpu fpp memory events custom serial cia blitter autoconf \
+       traps ersatz keybuf expansion zfile cfgfile picasso96 inputdevice \
+       gfxutil audio sinctable drawing native2amiga disk crc32 savestate \
+       unzip uaeexe uaelib fdi2raw hotkeys ar driveclick enforcer misc \
+       missing readcpu \
+       blitfunc blittable cpustbl cpudefs cpuemu_0 cpuemu_5 cpuemu_6 \
+       writelog debug identify \
+       filesys fsdb fsusage hardfile filesys_unix fsdb_unix hardfile_unix \
+       scsi-none bsdsocket stubs_nodisk c99_complex_shim
+
+SUBDIR_SRCS = \
+       md-68k/support.c \
+       od-amiga/main.c od-amiga/memory.c od-amiga/support.c \
+       od-amiga/ami-disk.c od-amiga/blkdev-amiga.c \
+       gfx-amigaos/ami-win.c gfx-amigaos/ami-appw.c \
+       sd-amigaos/sound.c \
+       jd-amigaos/joystick.c \
+       gui-muirexx/ami-rexx.c gui-muirexx/ami-gui.c \
+       td-amigaos/thread.c \
+       keymap/keymap.c keymap/amiga_rawkeys.c \
+       dms/crc_csum.c dms/getbits.c dms/maketbl.c dms/pfile.c dms/tables.c \
+       dms/u_deep.c dms/u_heavy.c dms/u_init.c dms/u_medium.c dms/u_quick.c \
+       dms/u_rle.c \
+       caps/caps.c
+
+ZLIB = adler32 compress crc32 deflate gzio infblock infcodes inffast \
+       inflate inftrees infutil trees uncompr zutil
+
+OBJS = $(addprefix $(OBJDIR)/src/,$(addsuffix .o,$(CORE))) \
+       $(addprefix $(OBJDIR)/src/,$(SUBDIR_SRCS:.c=.o))
+ZOBJS = $(addprefix $(OBJDIR)/zlib/,$(addsuffix .o,$(ZLIB)))
+
+LIBS = $(OBJDIR)/libz.a -lm -lamiga
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS) $(OBJDIR)/libz.a
+	$(CC) $(CPUFLAGS) -o $@ $(OBJS) $(LIBS)
+
+$(OBJDIR)/libz.a: $(ZOBJS)
+	$(AR) rcs $@ $^
+
+# Generated CPU cores use UAE_LIKELY/UAE_UNLIKELY from noregparm.h.
+$(OBJDIR)/src/cpuemu_%.o: EXTRA_CFLAGS = -include src/noregparm.h
+# GCC 6.5 ICEs on fpp.c with -ffast-math, and FPU emulation wants IEEE rules.
+$(OBJDIR)/src/fpp.o: EXTRA_CFLAGS = -fno-fast-math
+# GCC folds sin+cos into cexp(), which clib2 lacks; the shim supplies it and
+# must not be folded into a call to itself.
+$(OBJDIR)/src/c99_complex_shim.o: EXTRA_CFLAGS = -fno-fast-math -fno-builtin
+# DMS code uses non-static 'inline' and relies on GNU89 semantics.
+$(OBJDIR)/src/dms/%.o: EXTRA_CFLAGS = -fgnu89-inline
+
+$(OBJDIR)/src/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@
+
+$(OBJDIR)/zlib/%.o: zlib/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -Izlib -c $< -o $@
+
+clean:
+	rm -rf $(OBJDIR) $(TARGET)
+
+.PHONY: all clean
