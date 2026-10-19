@@ -16,3 +16,5 @@ share/adf/
 share/hdf/
 share/kicks/
 share/*.uss
+share/test
+share/*.uaerc
