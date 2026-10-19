@@ -1213,6 +1213,15 @@ static void gui_gadget (int id, int code)
     case GID_LOADCFG:
         if (gui_asl ("Configuration to load", 0, 0, 0, path, sizeof path)) {
             int type = 0;
+            FILE *f = fopen (path, "r");
+            if (!f) {
+                gui_status ("can't open that config");
+                break;
+            }
+            fclose (f);
+            /* the file's mounts replace ours: the parser adds them to the
+               same list, and a mount already there stopped the load */
+            free_mountinfo (changed_prefs.mountinfo);
             if (cfgfile_load (&changed_prefs, path, &type)) {
                 show_page (PAGE_SETTINGS);
                 gui_status ("config loaded - hard reset to apply");
@@ -1307,7 +1316,9 @@ static void gui_gadget (int id, int code)
 
     case GID_SAVECFG:
         if (gui_asl ("Save configuration as", 0, 0, 1, path, sizeof path))
-            gui_status (cfgfile_save (&currprefs, path, 0) ? "config saved" : "config save failed");
+            /* changed_prefs: what the GUI shows, applied or still waiting
+               for the hard reset (currprefs would drop those) */
+            gui_status (cfgfile_save (&changed_prefs, path, 0) ? "config saved" : "config save failed");
         break;
     }
 }

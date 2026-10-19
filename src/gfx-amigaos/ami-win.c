@@ -787,6 +787,8 @@ static int screen_is_picasso = 0;   /* the window shows the card, not the chipse
 static void p96_flush (void);
 static void p96_invalidate_all (void);
 static void do_p96_display (void);
+static int p96buf_w, p96buf_h;          /* the card picture's size (defined below) */
+static int p96_saved_dw;                /* the window was resized for the card */
 #endif
 
 /* Pause-on-focus-loss feature.
@@ -2053,6 +2055,38 @@ static void get_displayid (ULONG *DI, LONG *DE)
 
     *DI = INVALID_ID;
     *DE = 0;
+
+#ifdef PICASSO96
+    /* The card's picture showing: a mode of its size, the deepest there is
+     * (its colours are 32-bit). None: the chipset's choice below. */
+    if (screen_is_picasso && p96buf_w > 0 && CyberGfxBase) {
+        ULONG mode = INVALID_ID, best = INVALID_ID;
+        int bestdepth = 0;
+        while ((mode = NextDisplayInfo (mode)) != (ULONG)INVALID_ID) {
+            struct DimensionInfo dim;
+            int mw, mh, md;
+            if (!IsCyberModeID (mode))
+                continue;
+            if (!GetDisplayInfoData (NULL, (UBYTE *)&dim, sizeof dim, DTAG_DIMS, mode))
+                continue;
+            mw = dim.Nominal.MaxX - dim.Nominal.MinX + 1;
+            mh = dim.Nominal.MaxY - dim.Nominal.MinY + 1;
+            md = GetCyberIDAttr (CYBRIDATTR_DEPTH, mode);
+            if (mw == p96buf_w && mh == p96buf_h && md >= 15 && md > bestdepth) {
+                best = mode;
+                bestdepth = md;
+            }
+        }
+        if (best != (ULONG)INVALID_ID) {
+            *DI = best;
+            *DE = bestdepth;
+            write_log ("DISPLAY: card picture %dx%d -> mode 0x%08lx depth %d\n",
+                       p96buf_w, p96buf_h, (unsigned long)best, bestdepth);
+            return;
+        }
+        write_log ("DISPLAY: no %dx%d RTG mode for the card's picture\n", p96buf_w, p96buf_h);
+    }
+#endif
 
     s = getenv(UAESM);
 
@@ -3508,7 +3542,17 @@ void gfx_set_picasso_state (int on)
  * or back at the chipset's */
 static void do_p96_display (void)
 {
-    if (screen_is_picasso) {
+    if (!usepub && W && S) {
+        /* fullscreen: a screen to fit - the card's size, or back to the
+           chipset's (get_displayid picks by screen_is_picasso) */
+        if (!screen_is_picasso || S->Width < p96buf_w || S->Height < p96buf_h
+            || S->Width > p96buf_w + 64 || S->Height > p96buf_h + 64) {
+            close_display ();
+            if (!open_display ())
+                open_display ();
+        }
+        p96_invalidate_all ();
+    } else if (screen_is_picasso) {
         if (usepub && W) {
             p96_saved_dw = 1;           /* the window is the card's size now */
             display_w = p96buf_w;
@@ -3968,7 +4012,16 @@ static int open_display (void)
     YOffset  = 0;
 
     /* display_w/h is the requested window size (may be larger for stretching).
-     * Defaults to native render size if not set. */
+     * Defaults to native render size if not set - or the card's picture
+     * size while it shows (coming back from fullscreen, say). */
+#ifdef PICASSO96
+    if (screen_is_picasso && display_w <= 0 && p96buf_w > 0
+        && currprefs.amiga_screen_type == UAESCREENTYPE_PUBLIC) {
+        display_w    = p96buf_w;
+        display_h    = p96buf_h;
+        p96_saved_dw = 1;
+    }
+#endif
     if (display_w <= 0) display_w = currprefs.gfx_width_win;
     if (display_h <= 0) display_h = currprefs.gfx_height_win;
 
@@ -4187,6 +4240,11 @@ static int open_display (void)
 
     reset_drawing ();
     pointer_state = DONT_KNOW;
+#ifdef PICASSO96
+    /* a new window or screen: the card's whole picture again, or an idle
+       RTG screen (nothing new drawn by the guest) stays black */
+    p96_invalidate_all ();
+#endif
     return 1;
 }
 
