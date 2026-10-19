@@ -259,6 +259,9 @@ struct uae_prefs {
 
     int jport0;
     int jport1;
+    int jport_cd32[2];          /* the port's joystick is a CD32 pad (7 buttons) */
+    int jport_remap[2][7];      /* per host button: a pad choice, 0 = default
+                                   (inputdevice.c: inputdevice_padchoice_*) */
     int input_selected_setting;
     int input_joymouse_multiplier;
     int input_joymouse_deadzone;

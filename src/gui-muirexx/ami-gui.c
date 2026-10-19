@@ -19,6 +19,7 @@
 #include "savestate.h"
 #include "uae.h"
 #include "filesys.h"
+#include "inputdevice.h"
 
 #include <intuition/intuition.h>
 #include <libraries/asl.h>
@@ -435,13 +436,13 @@ void gui_fps (int fps, int idle)
  * only sets a flag; gui_handle_events() opens or closes the window.
  */
 
-#define GUI_W   468             /* inner size */
+#define GUI_W   536             /* inner size */
 #define GUI_H   166
 #define GH      14              /* gadget height, topaz 8 */
 #define ROW     19
 
-enum { PAGE_DRIVES, PAGE_STATE, PAGE_EMULATOR, PAGE_SETTINGS, PAGE_MEMORY, PAGE_MOUNTS, PAGE_COUNT };
-static const char *page_names[PAGE_COUNT] = { "Drives", "State", "Emulator", "Settings", "Memory", "HD/Share" };
+enum { PAGE_DRIVES, PAGE_STATE, PAGE_EMULATOR, PAGE_SETTINGS, PAGE_MEMORY, PAGE_MOUNTS, PAGE_INPUT, PAGE_COUNT };
+static const char *page_names[PAGE_COUNT] = { "Drives", "State", "Emulator", "Settings", "Memory", "HD/Share", "Input" };
 
 enum {
     GID_PAGE = 1,                               /* + page */
@@ -454,8 +455,22 @@ enum {
     GID_CPU = 50, GID_COMPAT, GID_ROM, GID_LOADCFG, GID_SAVECFG,
     GID_CHIP = 60, GID_SLOW, GID_FAST, GID_Z3, GID_MEMRESET,
     GID_MOUNTLIST = 70, GID_MOUNTDEV, GID_MOUNTVOL, GID_MOUNTPRI, GID_MOUNTRO, GID_MOUNTTYPE,
-    GID_ADDHDF, GID_ADDDIR, GID_REMOVE, GID_MOUNTRESET
+    GID_ADDHDF, GID_ADDDIR, GID_REMOVE, GID_MOUNTRESET,
+    GID_PORT0DEV = 90, GID_PORT1DEV, GID_PORT0PAD, GID_PORT1PAD, GID_REMAPPORT, GID_REMAPDEF,
+    GID_REMAPBTN = 100                          /* + host button 0-6 */
 };
+
+/* Input: what's in each Amiga port (jport0/jport1 values), and the pad
+ * buttons' remapping (inputdevice.c pad choices) */
+static const char *port0_labels[] = { "Mouse", "Joystick", "Nothing", 0 };
+static const int   port0_jsem[]   = { JSEM_MICE, JSEM_JOYS + 0, JSEM_NONE };
+static const char *port1_labels[] = { "Joystick", "Keypad", "Cursor keys", "Nothing", 0 };
+static const int   port1_jsem[]   = { JSEM_JOYS + 1, JSEM_KBDLAYOUT, JSEM_KBDLAYOUT + 1, JSEM_NONE };
+static const char *padtype_labels[] = { "Joystick", "CD32 pad", 0 };
+static const char *remapport_labels[] = { "Port 2", "Port 1", 0 };
+static const char *padbutton_names[7] = { "Red", "Blue", "Yellow", "Green", "FFW", "RWD", "Play" };
+static const char *padchoice_labels[64];
+static int remap_port = 1;                      /* Amiga port the remap rows edit */
 
 /* Memory choices, as fix_options() in main.c allows them. Up to 8 MB of
  * chip; Zorro II fast only with at most 2 MB chip; Z3 needs a 32-bit CPU. */
@@ -773,6 +788,29 @@ static void next_devname (char *buf)
     }
 }
 
+static int jsem_index (const int *jsem, int n, int v)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (jsem[i] == v)
+            return i;
+    return n - 1;                               /* "Nothing" */
+}
+
+/* the Input page's settings in both prefs, then the input mapping rebuilt */
+static void input_apply (void)
+{
+    currprefs.jport0 = changed_prefs.jport0;
+    currprefs.jport1 = changed_prefs.jport1;
+    memcpy (currprefs.jport_cd32, changed_prefs.jport_cd32, sizeof currprefs.jport_cd32);
+    memcpy (currprefs.jport_remap, changed_prefs.jport_remap, sizeof currprefs.jport_remap);
+    /* updateconfig forgets which keys are down without telling the Amiga:
+       the Ctrl+LAlt of the GUI hotkey stayed held there, and Workbench
+       took every click as a qualifier click. Key-ups for them first. */
+    inputdevice_release_all_keys ();
+    inputdevice_updateconfig (&currprefs);
+}
+
 static const char *gadget_string (struct Gadget *g)
 {
     return g ? (const char *) ((struct StringInfo *) g->SpecialInfo)->Buffer : "";
@@ -789,7 +827,7 @@ static struct Gadget *build_page (struct Gadget *g)
     mount_dev = mount_vol = mount_pri = mount_remove = 0;
 
     for (i = 0; i < PAGE_COUNT; i++)
-        g = mk (g, BUTTON_KIND, GID_PAGE + i, page_names[i], 4 + i * 77, 2, 74, GH, 0,
+        g = mk (g, BUTTON_KIND, GID_PAGE + i, page_names[i], 4 + i * 76, 2, 73, GH, 0,
                 GA_Disabled, i == gui_page, TAG_DONE);
 
     switch (gui_page) {
@@ -928,6 +966,43 @@ static struct Gadget *build_page (struct Gadget *g)
         y += ROW;
         g = mk (g, TEXT_KIND, 0, 0, 4, y, 460, GH, 0,
                 GTTX_Text, "Changes take effect at the next hard reset", TAG_DONE);
+        break;
+    }
+
+    case PAGE_INPUT: {
+        int b, n = inputdevice_padchoice_count ();
+
+        if (!padchoice_labels[0]) {
+            for (b = 0; b < n && b < 63; b++)
+                padchoice_labels[b] = inputdevice_padchoice_label (b);
+            padchoice_labels[b] = 0;
+        }
+        g = mk (g, CYCLE_KIND, GID_PORT0DEV, "Port 1", 64, y, 130, GH, PLACETEXT_LEFT,
+                GTCY_Labels, port0_labels,
+                GTCY_Active, jsem_index (port0_jsem, 3, changed_prefs.jport0), TAG_DONE);
+        g = mk (g, CYCLE_KIND, GID_PORT0PAD, "as", 230, y, 120, GH, PLACETEXT_LEFT,
+                GTCY_Labels, padtype_labels, GTCY_Active, changed_prefs.jport_cd32[0], TAG_DONE);
+        y += ROW;
+        g = mk (g, CYCLE_KIND, GID_PORT1DEV, "Port 2", 64, y, 130, GH, PLACETEXT_LEFT,
+                GTCY_Labels, port1_labels,
+                GTCY_Active, jsem_index (port1_jsem, 4, changed_prefs.jport1), TAG_DONE);
+        g = mk (g, CYCLE_KIND, GID_PORT1PAD, "as", 230, y, 120, GH, PLACETEXT_LEFT,
+                GTCY_Labels, padtype_labels, GTCY_Active, changed_prefs.jport_cd32[1], TAG_DONE);
+        g = mk (g, TEXT_KIND, 0, 0, 360, y - ROW, 172, GH * 2 + 4, 0,
+                GTTX_Text, "Joystick = the real port", TAG_DONE);
+        y += ROW + 4;
+        g = mk (g, CYCLE_KIND, GID_REMAPPORT, "Remap", 64, y, 130, GH, PLACETEXT_LEFT,
+                GTCY_Labels, remapport_labels, GTCY_Active, remap_port ? 0 : 1, TAG_DONE);
+        g = mk (g, BUTTON_KIND, GID_REMAPDEF, "All default", 230, y, 120, GH, 0, TAG_DONE);
+        y += ROW + 2;
+        for (b = 0; b < 7; b++) {
+            int col = b / 4, row = b % 4, c = changed_prefs.jport_remap[remap_port][b];
+            g = mk (g, CYCLE_KIND, GID_REMAPBTN + b, padbutton_names[b],
+                    col ? 330 : 64, y + row * ROW, 190, GH, PLACETEXT_LEFT,
+                    GTCY_Labels, padchoice_labels, GTCY_Active, c > 0 && c < n ? c : 0, TAG_DONE);
+        }
+        g = mk (g, TEXT_KIND, 0, 0, 280, y + 3 * ROW, 252, GH, 0,
+                GTTX_Text, "Changes apply at once", TAG_DONE);
         break;
     }
     }
@@ -1109,6 +1184,14 @@ static void gui_gadget (int id, int code)
         }
         return;
     }
+    if (id >= GID_REMAPBTN && id < GID_REMAPBTN + 7) {
+        int c = code;
+        if (c < 0 || c >= inputdevice_padchoice_count ())
+            c = 0;
+        changed_prefs.jport_remap[remap_port][id - GID_REMAPBTN] = c;
+        input_apply ();
+        return;
+    }
     if (id >= GID_DF_EJECT && id < GID_DF_EJECT + 4) {
         disk_eject (id - GID_DF_EJECT);
         show_page (PAGE_DRIVES);
@@ -1252,6 +1335,30 @@ static void gui_gadget (int id, int code)
     case GID_MOUNTRESET:
         uae_reset (1);
         gui_status ("hard reset");
+        break;
+
+    case GID_PORT0DEV:
+        changed_prefs.jport0 = port0_jsem[code < 0 ? 0 : code > 2 ? 2 : code];
+        input_apply ();
+        break;
+    case GID_PORT1DEV:
+        changed_prefs.jport1 = port1_jsem[code < 0 ? 0 : code > 3 ? 3 : code];
+        input_apply ();
+        break;
+    case GID_PORT0PAD:
+    case GID_PORT1PAD:
+        changed_prefs.jport_cd32[id - GID_PORT0PAD] = code != 0;
+        input_apply ();
+        gui_status (code ? "CD32 pad" : "joystick");
+        break;
+    case GID_REMAPPORT:
+        remap_port = code ? 0 : 1;
+        show_page (PAGE_INPUT);
+        break;
+    case GID_REMAPDEF:
+        memset (changed_prefs.jport_remap[remap_port], 0, sizeof changed_prefs.jport_remap[remap_port]);
+        input_apply ();
+        show_page (PAGE_INPUT);
         break;
 
     case GID_MOUNTLIST:

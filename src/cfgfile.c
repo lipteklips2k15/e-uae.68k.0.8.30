@@ -443,6 +443,15 @@ void save_options (FILE *f, const struct uae_prefs *p, int type)
 	    sprintf (tmp2, "none");
 	sprintf (tmp1, "joyport%d=%s\n", i, tmp2);
 	cfgfile_write (f, tmp1);
+	if (p->jport_cd32[i])
+	    cfgfile_write (f, "joyport%d_pad=cd32\n", i);
+	{
+	    int b;
+	    for (b = 0; b < 7; b++)
+		if (p->jport_remap[i][b] > 0)
+		    cfgfile_write (f, "joyport%d_button%d=%s\n", i, b,
+				   inputdevice_padchoice_cfg (p->jport_remap[i][b]));
+	}
     }
 
     cfgfile_write (f, "bsdsocket_emu=%s\n", p->socket_emu ? "true" : "false");
@@ -956,6 +965,22 @@ static int cfgfile_parse_host (struct uae_prefs *p, char *option, char *value)
 	p->gfx_width_fs = p->gfx_width_win;
 	p->gfx_height_fs = p->gfx_height_win;
 	return 1;
+    }
+
+    /* joyport<n>_pad=cd32|joystick, joyport<n>_button<b>=<pad choice> */
+    if (strncmp (option, "joyport", 7) == 0 && (option[7] == '0' || option[7] == '1')
+	&& option[8] == '_') {
+	int port = option[7] - '0';
+	if (strcmp (option + 9, "pad") == 0) {
+	    p->jport_cd32[port] = strcasecmp (value, "cd32") == 0;
+	    return 1;
+	}
+	if (strncmp (option + 9, "button", 6) == 0 && option[15] >= '0' && option[15] <= '6'
+	    && option[16] == 0) {
+	    int c = inputdevice_padchoice_find (value);
+	    p->jport_remap[port][option[15] - '0'] = c > 0 ? c : 0;
+	    return 1;
+	}
     }
 
     if (strcmp (option, "joyport0") == 0 || strcmp (option, "joyport1") == 0) {
@@ -2331,6 +2356,8 @@ void default_prefs (struct uae_prefs *p, int type)
 
     p->jport0 = JSEM_MICE;
     p->jport1 = JSEM_KBDLAYOUT;
+    memset (p->jport_cd32, 0, sizeof p->jport_cd32);
+    memset (p->jport_remap, 0, sizeof p->jport_remap);
     p->keyboard_lang = KBD_LANG_US;
 
     p->produce_sound = 3;

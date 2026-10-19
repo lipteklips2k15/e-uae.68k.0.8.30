@@ -76,6 +76,13 @@ INPUTEVENT_END
 #undef DEFEVENT
 
 extern void handle_cd32_joystick_cia (uae_u8, uae_u8);
+
+/* pad button remapping choices (prefs jport_remap) */
+extern int inputdevice_padchoice_count (void);
+extern const char *inputdevice_padchoice_label (int n);
+extern const char *inputdevice_padchoice_cfg (int n);
+extern int inputdevice_padchoice_find (const char *cfg);
+
 extern uae_u8 handle_parport_joystick (int port, uae_u8 pra, uae_u8 dra);
 extern uae_u8 handle_joystick_buttons (uae_u8);
 extern int getbuttonstate (int joy, int button);

@@ -59,6 +59,7 @@ if ($Workbench) {
     $lines += "Copy DIZ:guest/Startup-Sequence $g/S/Startup-Sequence"
 }
 $lines += "Copy DIZ:guest/rtgtest $g/C/rtgtest",
+    "Copy DIZ:guest/inputmon $g/C/inputmon",
     "List $g/Devs/Monitors $g/Libs/Picasso96 >DIZ:monitors.txt",
     'Echo e-uae-start >>DIZ:boot.txt',
     'SetEnv EUAE_LOG DIZ:euae.log',

@@ -18,3 +18,4 @@ share/kicks/
 share/*.uss
 share/test
 share/*.uaerc
+share/guest/inputmon

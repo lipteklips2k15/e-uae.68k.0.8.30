@@ -27,3 +27,5 @@ gfx_fullscreen_amiga=false
 gfx_fullscreen_picasso=false
 hardfile2=rw,DH0:U:\Amiga games\e-uae.68k.0.8.30\winuae\euae.hdf,0,0,0,512,0,,uae0
 filesystem2=rw,DIZ:DIZ:U:\Amiga games\e-uae.68k.0.8.30\winuae\share,5
+joyport1=joy0
+joyport1mode=cd32

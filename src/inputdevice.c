@@ -1205,6 +1205,16 @@ int handle_input_event (int nr, int state, int max, int autofire)
     if (nr <= 0)
 	return 0;
     ie = &events[nr];
+    {
+	/* EUAE_INPUTLOG set: the first input events into the log (debugging) */
+	static int logleft = -1;
+	if (logleft < 0)
+	    logleft = getenv ("EUAE_INPUTLOG") ? 400 : 0;
+	if (logleft > 0 && ie->type == 4) {     /* buttons: fire, 2nd, CD32 ... */
+	    logleft--;
+	    write_log ("INPUT: %s %d\n", ie->confname, state);
+	}
+    }
     if (autofire) {
 	if (state)
 	    queue_input_event (nr, state, max, currprefs.input_autofire_framecnt, 1);
@@ -1508,7 +1518,8 @@ static void scanevents (struct uae_prefs *p)
     }
 }
 
-#ifdef CD32
+/* Host pad buttons 0-6 are red, blue, yellow, green, FFW, RWD, play
+ * (jd-amigaos/joystick.c reads them in that order). */
 static void setcd32 (int joy, int n)
 {
     joysticks[joy].eventid[ID_BUTTON_OFFSET + 0][0] = n ? INPUTEVENT_JOY2_CD32_RED : INPUTEVENT_JOY1_CD32_RED;
@@ -1519,7 +1530,101 @@ static void setcd32 (int joy, int n)
     joysticks[joy].eventid[ID_BUTTON_OFFSET + 5][0] = n ? INPUTEVENT_JOY2_CD32_RWD : INPUTEVENT_JOY1_CD32_RWD;
     joysticks[joy].eventid[ID_BUTTON_OFFSET + 6][0] = n ? INPUTEVENT_JOY2_CD32_PLAY :  INPUTEVENT_JOY1_CD32_PLAY;
 }
-#endif
+
+/*
+ * What a pad button can be remapped to (prefs jport_remap[port][button],
+ * an index here; config "joyport<port>_button<n>=<cfg>"). ev[0]/ev[1] are
+ * the events for Amiga port 1 and 2.
+ */
+struct padchoice {
+    const char *cfg, *label;
+    int ev[2];
+};
+
+static const struct padchoice padchoices[] = {
+    { "default", "Default",          { 0, 0 } },
+    { "none",    "Nothing",          { 0, 0 } },
+    { "fire",    "Fire",             { INPUTEVENT_JOY1_FIRE_BUTTON, INPUTEVENT_JOY2_FIRE_BUTTON } },
+    { "2nd",     "2nd fire",         { INPUTEVENT_JOY1_2ND_BUTTON,  INPUTEVENT_JOY2_2ND_BUTTON } },
+    { "3rd",     "3rd fire",         { INPUTEVENT_JOY1_3RD_BUTTON,  INPUTEVENT_JOY2_3RD_BUTTON } },
+    { "red",     "CD32 Red",         { INPUTEVENT_JOY1_CD32_RED,    INPUTEVENT_JOY2_CD32_RED } },
+    { "blue",    "CD32 Blue",        { INPUTEVENT_JOY1_CD32_BLUE,   INPUTEVENT_JOY2_CD32_BLUE } },
+    { "yellow",  "CD32 Yellow",      { INPUTEVENT_JOY1_CD32_YELLOW, INPUTEVENT_JOY2_CD32_YELLOW } },
+    { "green",   "CD32 Green",       { INPUTEVENT_JOY1_CD32_GREEN,  INPUTEVENT_JOY2_CD32_GREEN } },
+    { "ffw",     "CD32 FFW",         { INPUTEVENT_JOY1_CD32_FFW,    INPUTEVENT_JOY2_CD32_FFW } },
+    { "rwd",     "CD32 RWD",         { INPUTEVENT_JOY1_CD32_RWD,    INPUTEVENT_JOY2_CD32_RWD } },
+    { "play",    "CD32 Play",        { INPUTEVENT_JOY1_CD32_PLAY,   INPUTEVENT_JOY2_CD32_PLAY } },
+    { "up",      "Joystick up",      { INPUTEVENT_JOY1_UP,          INPUTEVENT_JOY2_UP } },
+    { "key_space",  "Key Space",     { INPUTEVENT_KEY_SPACE,        INPUTEVENT_KEY_SPACE } },
+    { "key_return", "Key Return",    { INPUTEVENT_KEY_RETURN,       INPUTEVENT_KEY_RETURN } },
+    { "key_esc",    "Key Esc",       { INPUTEVENT_KEY_ESC,          INPUTEVENT_KEY_ESC } },
+    { "key_p",      "Key P",         { INPUTEVENT_KEY_P,            INPUTEVENT_KEY_P } },
+    { "key_y",      "Key Y",         { INPUTEVENT_KEY_Y,            INPUTEVENT_KEY_Y } },
+    { "key_n",      "Key N",         { INPUTEVENT_KEY_N,            INPUTEVENT_KEY_N } },
+    { "key_1",      "Key 1",         { INPUTEVENT_KEY_1,            INPUTEVENT_KEY_1 } },
+    { "key_2",      "Key 2",         { INPUTEVENT_KEY_2,            INPUTEVENT_KEY_2 } },
+    { "key_f1",     "Key F1",        { INPUTEVENT_KEY_F1,           INPUTEVENT_KEY_F1 } },
+    { "key_f2",     "Key F2",        { INPUTEVENT_KEY_F2,           INPUTEVENT_KEY_F2 } },
+    { "key_f3",     "Key F3",        { INPUTEVENT_KEY_F3,           INPUTEVENT_KEY_F3 } },
+    { "key_f4",     "Key F4",        { INPUTEVENT_KEY_F4,           INPUTEVENT_KEY_F4 } },
+    { "key_f5",     "Key F5",        { INPUTEVENT_KEY_F5,           INPUTEVENT_KEY_F5 } },
+    { "key_help",   "Key Help",      { INPUTEVENT_KEY_HELP,         INPUTEVENT_KEY_HELP } },
+    { "key_tab",    "Key Tab",       { INPUTEVENT_KEY_TAB,          INPUTEVENT_KEY_TAB } },
+    { "key_del",    "Key Del",       { INPUTEVENT_KEY_DEL,          INPUTEVENT_KEY_DEL } },
+    { "key_lalt",   "Key Left Alt",  { INPUTEVENT_KEY_ALT_LEFT,     INPUTEVENT_KEY_ALT_LEFT } },
+    { "key_lshift", "Key Left Shift",{ INPUTEVENT_KEY_SHIFT_LEFT,   INPUTEVENT_KEY_SHIFT_LEFT } },
+    { "key_ctrl",   "Key Ctrl",      { INPUTEVENT_KEY_CTRL,         INPUTEVENT_KEY_CTRL } },
+    { "key_lamiga", "Key Left Amiga",{ INPUTEVENT_KEY_AMIGA_LEFT,   INPUTEVENT_KEY_AMIGA_LEFT } },
+    { "key_up",     "Key Cursor up", { INPUTEVENT_KEY_CURSOR_UP,    INPUTEVENT_KEY_CURSOR_UP } },
+    { "key_down",   "Key Cursor down",  { INPUTEVENT_KEY_CURSOR_DOWN,  INPUTEVENT_KEY_CURSOR_DOWN } },
+    { "key_left",   "Key Cursor left",  { INPUTEVENT_KEY_CURSOR_LEFT,  INPUTEVENT_KEY_CURSOR_LEFT } },
+    { "key_right",  "Key Cursor right", { INPUTEVENT_KEY_CURSOR_RIGHT, INPUTEVENT_KEY_CURSOR_RIGHT } },
+    { "pause",   "Pause emulation",  { INPUTEVENT_SPC_PAUSE,        INPUTEVENT_SPC_PAUSE } },
+};
+
+#define PADCHOICES ((int) (sizeof padchoices / sizeof padchoices[0]))
+
+int inputdevice_padchoice_count (void)
+{
+    return PADCHOICES;
+}
+
+const char *inputdevice_padchoice_label (int n)
+{
+    return n >= 0 && n < PADCHOICES ? padchoices[n].label : 0;
+}
+
+const char *inputdevice_padchoice_cfg (int n)
+{
+    return n >= 0 && n < PADCHOICES ? padchoices[n].cfg : 0;
+}
+
+int inputdevice_padchoice_find (const char *cfg)
+{
+    int n;
+    for (n = 0; n < PADCHOICES; n++)
+	if (!strcasecmp (padchoices[n].cfg, cfg))
+	    return n;
+    return -1;
+}
+
+/* The joystick in Amiga port "port" (0/1): a CD32 pad if asked for, then
+ * the remapped buttons on top. */
+static void set_port_pad (struct uae_prefs *prefs, int joy, int port)
+{
+    int b, c, k;
+
+    if (prefs->jport_cd32[port])
+	setcd32 (joy, port);
+    for (b = 0; b < 7; b++) {
+	c = prefs->jport_remap[port][b];
+	if (c <= 0 || c >= PADCHOICES)
+	    continue;
+	for (k = 0; k < MAX_INPUT_SUB_EVENT; k++)
+	    joysticks[joy].eventid[ID_BUTTON_OFFSET + b][k] = 0;
+	joysticks[joy].eventid[ID_BUTTON_OFFSET + b][0] = padchoices[c].ev[port];
+    }
+}
 
 int compatibility_device[2];
 
@@ -1569,6 +1674,7 @@ static void compatibility_mode (struct uae_prefs *prefs)
 	if (cd32_enabled)
 	    setcd32 (joy, 1);
 #endif
+	set_port_pad (prefs, joy, 1);
 	joysticks[joy].enabled = 1;
     }
 
@@ -1580,6 +1686,7 @@ static void compatibility_mode (struct uae_prefs *prefs)
 	joysticks[joy].eventid[ID_BUTTON_OFFSET + 0][0] = INPUTEVENT_JOY1_FIRE_BUTTON;
 	joysticks[joy].eventid[ID_BUTTON_OFFSET + 1][0] = INPUTEVENT_JOY1_2ND_BUTTON;
 	joysticks[joy].eventid[ID_BUTTON_OFFSET + 2][0] = INPUTEVENT_JOY1_3RD_BUTTON;
+	set_port_pad (prefs, joy, 0);
 	joysticks[joy].enabled = 1;
     }
 
@@ -1665,6 +1772,9 @@ void inputdevice_updateconfig (struct uae_prefs *prefs)
 	cd32_pad_enabled[1] = 1;
 #endif
 
+    write_log ("INPUT: ports %d/%d, CD32 pad %d/%d, mouse port %d/%d, joysticks %d %d, mice %d\n",
+	       prefs->jport0, prefs->jport1, cd32_pad_enabled[0], cd32_pad_enabled[1],
+	       mouse_port[0], mouse_port[1], use_joysticks[0], use_joysticks[1], use_mice[0]);
     mousehack_enable ();
 }
 

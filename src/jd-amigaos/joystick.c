@@ -23,7 +23,7 @@ struct LowLevelIFace *ILowLevel;
 
 static unsigned int nr_joysticks;
 
-#define MAX_BUTTONS  2
+#define MAX_BUTTONS  7          /* a CD32 pad's; a plain joystick reports red/blue */
 #define MAX_AXLES    2
 #define FIRST_AXLE   0
 #define FIRST_BUTTON 2
@@ -88,8 +88,14 @@ static void read_joy (unsigned int nr)
 	    setjoystickstate (nr, 0, x, 1);
 	    setjoystickstate (nr, 1, y, 1);
 
-	    setjoybuttonstate (nr, 0, state & JPF_BUTTON_RED);
-	    setjoybuttonstate (nr, 1, state & JPF_BUTTON_BLUE);
+	    /* in the order inputdevice.c's CD32 mapping expects */
+	    setjoybuttonstate (nr, 0, (state & JPF_BUTTON_RED) != 0);
+	    setjoybuttonstate (nr, 1, (state & JPF_BUTTON_BLUE) != 0);
+	    setjoybuttonstate (nr, 2, (state & JPF_BUTTON_YELLOW) != 0);
+	    setjoybuttonstate (nr, 3, (state & JPF_BUTTON_GREEN) != 0);
+	    setjoybuttonstate (nr, 4, (state & JPF_BUTTON_FORWARD) != 0);
+	    setjoybuttonstate (nr, 5, (state & JPF_BUTTON_REVERSE) != 0);
+	    setjoybuttonstate (nr, 6, (state & JPF_BUTTON_PLAY) != 0);
 	}
     }
 }
@@ -120,8 +126,9 @@ static unsigned int get_joystick_widget_num (unsigned int joy)
 static int get_joystick_widget_type (unsigned int joy, unsigned int num, char *name, uae_u32 *code)
 {
     if (num >= MAX_AXLES && num < MAX_AXLES+MAX_BUTTONS) {
+	static const char *names[MAX_BUTTONS] = { "Red", "Blue", "Yellow", "Green", "FFW", "RWD", "Play" };
 	if (name)
-	    sprintf (name, "Button %d", num + 1 - MAX_AXLES);
+	    strcpy (name, names[num - MAX_AXLES]);
 	return IDEV_WIDGET_BUTTON;
     } else if (num < MAX_AXLES) {
 	if (name)

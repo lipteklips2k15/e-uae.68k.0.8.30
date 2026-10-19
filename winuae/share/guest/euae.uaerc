@@ -11,5 +11,6 @@ z3mem_size=16
 gfxcard_size=16
 sound_output=normal
 joyport0=mouse
+joyport1=joy1
 filesystem2=rw,DH0:GuestSys:DIZ:guest/sys,0
 amiga.screen_type=public
