@@ -1140,23 +1140,26 @@ static void allocate_expamem (void)
 
 #ifdef SAVESTATE
     if (savestate_state == STATE_RESTORE) {
-	if (allocated_fastmem > 0) {
+	/* only memory the state file holds: a zero file position means the
+	 * chunk wasn't there, and restore_ram would copy the file header in */
+	if (allocated_fastmem > 0 && fast_filepos) {
 	    restore_ram (fast_filepos, fastmemory);
 	    map_banks (&fastmem_bank, fastmem_start >> 16, currprefs.fastmem_size >> 16,
 		       allocated_fastmem);
 	}
-	if (allocated_z3fastmem > 0) {
+	if (allocated_z3fastmem > 0 && z3_filepos) {
 	    restore_ram (z3_filepos, z3fastmem);
 	    map_banks (&z3fastmem_bank, z3fastmem_start >> 16, currprefs.z3fastmem_size >> 16,
 		       allocated_z3fastmem);
 	}
 #ifdef PICASSO96
-	if (allocated_gfxmem > 0 && gfxmem_start > 0) {
+	if (allocated_gfxmem > 0 && gfxmem_start > 0 && p96_filepos) {
 	    restore_ram (p96_filepos, gfxmemory);
 	    map_banks (&gfxmem_bank, gfxmem_start >> 16, currprefs.gfxmem_size >> 16,
 		       allocated_gfxmem);
 	}
 #endif
+	fast_filepos = z3_filepos = p96_filepos = 0;   /* not for the next file */
     }
 #endif /* SAVESTATE */
 }

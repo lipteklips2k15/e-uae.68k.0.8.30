@@ -43,6 +43,7 @@
 #include "xwin.h"
 #include "picasso96.h"
 #include "uae_endian.h"
+#include "savestate.h"
 
 #ifdef JIT
 int        have_done_picasso       = 0;         /* For the JIT compiler */
@@ -1577,6 +1578,97 @@ uae_u32 REGPARAM2 picasso_SetPanning (struct regstruct *regs)
 
     return 1;
 }
+
+#ifdef SAVESTATE
+/*
+ * The card's state for save states ("P96 " chunk; its memory is "PRAM").
+ * The driver only sets mode, panning and palette when the guest asks, so a
+ * restore has to replay them: restore_p96 keeps the state, and
+ * picasso96_restore_finish applies it after the reset that follows.
+ */
+static struct picasso96_state_struct p96_restored;
+static int p96_restored_flags = -1;     /* -1: nothing to restore */
+
+uae_u8 *save_p96 (uae_u32 *len, uae_u8 *dstptr)
+{
+    uae_u8 *dstbak, *dst;
+    int i;
+
+    if (!allocated_gfxmem)
+	return 0;
+    dstbak = dst = dstptr ? dstptr : malloc (64 + 256 * 3);
+    if (!dst)
+	return 0;
+    save_u32 (1);                               /* chunk version */
+    save_u32 ((picasso_requested_on ? 1 : 0) | (set_gc_called ? 2 : 0) | (set_panning_called ? 4 : 0));
+    save_u32 (picasso96_state.RGBFormat);
+    save_u32 (picasso96_state.Address);
+    save_u16 (picasso96_state.Width);
+    save_u16 (picasso96_state.VirtualWidth);
+    save_u16 (picasso96_state.BytesPerRow);
+    save_u16 (picasso96_state.Height);
+    save_u16 (picasso96_state.VirtualHeight);
+    save_u8 (picasso96_state.GC_Depth);
+    save_u8 (picasso96_state.GC_Flags);
+    save_u32 (picasso96_state.XOffset);
+    save_u32 (picasso96_state.YOffset);
+    save_u8 (picasso96_state.SwitchState);
+    save_u8 (picasso96_state.BytesPerPixel);
+    for (i = 0; i < 256; i++) {
+	save_u8 (picasso96_state.CLUT[i].Red);
+	save_u8 (picasso96_state.CLUT[i].Green);
+	save_u8 (picasso96_state.CLUT[i].Blue);
+    }
+    *len = dst - dstbak;
+    return dstbak;
+}
+
+const uae_u8 *restore_p96 (const uae_u8 *src)
+{
+    int i;
+
+    if (restore_u32 () != 1)
+	return src;
+    p96_restored = picasso96_state;
+    p96_restored_flags         = restore_u32 ();
+    p96_restored.RGBFormat     = restore_u32 ();
+    p96_restored.Address       = restore_u32 ();
+    p96_restored.Width         = restore_u16 ();
+    p96_restored.VirtualWidth  = restore_u16 ();
+    p96_restored.BytesPerRow   = restore_u16 ();
+    p96_restored.Height        = restore_u16 ();
+    p96_restored.VirtualHeight = restore_u16 ();
+    p96_restored.GC_Depth      = restore_u8 ();
+    p96_restored.GC_Flags      = restore_u8 ();
+    p96_restored.XOffset       = (uae_s32) restore_u32 ();
+    p96_restored.YOffset       = (uae_s32) restore_u32 ();
+    p96_restored.SwitchState   = restore_u8 ();
+    p96_restored.BytesPerPixel = restore_u8 ();
+    for (i = 0; i < 256; i++) {
+	p96_restored.CLUT[i].Red   = restore_u8 ();
+	p96_restored.CLUT[i].Green = restore_u8 ();
+	p96_restored.CLUT[i].Blue  = restore_u8 ();
+    }
+    return src;
+}
+
+void picasso96_restore_finish (void)
+{
+    int flags = p96_restored_flags;
+
+    if (flags < 0)
+	return;
+    p96_restored_flags = -1;
+    picasso96_state    = p96_restored;
+    set_gc_called      = (flags & 2) != 0;
+    set_panning_called = (flags & 4) != 0;
+    write_log ("P96: restored %dx%d, format %d, card %s\n", picasso96_state.Width,
+	       picasso96_state.Height, picasso96_state.RGBFormat, (flags & 1) ? "on" : "off");
+    init_picasso_screen ();
+    /* check_picasso() switches the picture on at the frame's end */
+    picasso_requested_on = flags & 1;
+}
+#endif
 
 static void do_xor8 (uae_u8 * ptr, long len, uae_u32 val)
 {

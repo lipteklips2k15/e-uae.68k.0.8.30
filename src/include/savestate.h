@@ -100,6 +100,9 @@ extern uae_u8 *save_bram (uae_u32 *);
 extern uae_u8 *save_fram (uae_u32 *);
 extern uae_u8 *save_zram (uae_u32 *);
 extern uae_u8 *save_pram (uae_u32 *);
+extern uae_u8 *save_p96 (uae_u32 *, uae_u8 *);         /* picasso96.c */
+extern const uae_u8 *restore_p96 (const uae_u8 *);
+extern void picasso96_restore_finish (void);
 
 extern const uae_u8 *restore_rom (const uae_u8 *src);
 extern       uae_u8 *save_rom    (int first, uae_u32 *len, uae_u8 *dstptr);

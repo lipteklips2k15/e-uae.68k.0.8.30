@@ -61,6 +61,8 @@
 #include "gui.h"
 #include "audio.h"
 #include "version.h"
+#include "xwin.h"
+#include "picasso96.h"  /* defines PICASSO96: without it the card's memory and state were never saved */
 
 #ifndef _WIN32
 #define console_out printf
@@ -502,6 +504,9 @@ void savestate_restore_finish (void)
     savestate_file = 0;
     savestate_state = 0;
     restore_cpu_finish ();
+#ifdef PICASSO96
+    picasso96_restore_finish ();
+#endif
 }
 
 /* mode: 1=compressed, 2=not compressed, 3=ram dump, 4=audio dump */
