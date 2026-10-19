@@ -14,3 +14,5 @@ share/p96*.png
 share/guest/screenmode.prefs
 share/adf/
 share/hdf/
+share/kicks/
+share/*.uss
