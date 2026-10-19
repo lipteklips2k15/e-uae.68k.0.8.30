@@ -563,6 +563,21 @@ void gui_request_load (const char *path)
     gui_state_filename[sizeof (gui_state_filename) - 1] = '\0';
     pending_quick_load = 1;
 }
+
+/* For ami-gui.c: the emulator's window, and whether it sits on a public
+ * screen (Workbench) rather than a fullscreen of its own. */
+static struct Window *W;
+static int usepub;
+
+struct Window *ami_main_window (void)
+{
+    return W;
+}
+
+int ami_main_on_pubscreen (void)
+{
+    return W && usepub;
+}
 /* === FRF: 3-char quickstate code (0-9 / A-Z) ===================== */
 
 /* Mode: 0 = idle, 1 = SAVE, 2 = LOAD */

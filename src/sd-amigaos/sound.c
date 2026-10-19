@@ -134,7 +134,12 @@ int init_sound (void)
     int rate;
     const char *devname = NULL;
 
-    atexit (close_sound); /* if only amiga os had resource tracking */
+    static int atexit_done;
+
+    if (!atexit_done) {   /* once: sound can be switched on again and again */
+	atexit (close_sound); /* if only amiga os had resource tracking */
+	atexit_done = 1;
+    }
 
     /* determine the clock */
     clockval = get_clockval ();
@@ -259,11 +264,13 @@ void close_sound (void)
 	FreeMem ((APTR) buffers[1], sndbufsize);
 	buffers[1] = 0;
     }
-    if (sound_available) {
+    /* sound_available stays set: it says a driver exists, and clearing it
+     * here meant sound could never be switched back on once turned off */
+    if (have_sound) {
 #if !defined __amigaos4__ && !defined __MORPHOS__ && !defined __AROS__
 	cia->ciapra = (cia->ciapra & ~(1 << CIAB_LED)) | oldledstate;
 #endif
-	sound_available = 0;
+	have_sound = 0;
     }
 }
 
