@@ -516,6 +516,7 @@ void save_options (FILE *f, const struct uae_prefs *p, int type)
 #endif
 
     cfgfile_write (f, "immediate_blits=%s\n", p->immediate_blits ? "true" : "false");
+    cfgfile_write (f, "akiko_c2p=%s\n", p->akiko_c2p ? "true" : "false");
     cfgfile_write (f, "ntsc=%s\n", p->ntscmode ? "true" : "false");
     cfgfile_write (f, "hide_cursor=%s\n", p->hide_cursor ? "true" : "false");
     cfgfile_write (f, "show_leds=%s\n", p->leds_on_screen ? "true" : "false");
@@ -1106,6 +1107,8 @@ static int cfgfile_parse_hardware (struct uae_prefs *p, char *option, char *valu
     int tmpval, dummy, i;
     char tmpbuf[CONFIG_BLEN];
 
+    if (cfgfile_yesno (option, value, "akiko_c2p", &p->akiko_c2p))
+	return 1;
     if (cfgfile_yesno (option, value, "immediate_blits", &p->immediate_blits)
 	|| cfgfile_yesno (option, value, "kickshifter", &p->kickshifter)
 	|| cfgfile_yesno (option, value, "ntsc", &p->ntscmode)
@@ -2424,6 +2427,7 @@ void default_prefs (struct uae_prefs *p, int type)
     audio_default_options (p);
 
     p->immediate_blits = 0;
+    p->akiko_c2p = 0;
     p->collision_level = 2;
     p->leds_on_screen = 0;
     p->hide_cursor = 1;

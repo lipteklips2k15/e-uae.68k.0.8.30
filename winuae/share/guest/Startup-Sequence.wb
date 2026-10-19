@@ -1,6 +1,7 @@
 ; The Amiga inside E-UAE, to Workbench on the uaegfx card: a minimal OS 3.2
 ; startup. Steps go to SYS:guest.log (DIZ:guest/sys/guest.log outside).
 C:SetPatch QUIET
+FailAt 21              ; a log line that fails must not stop the boot
 Echo "guest: booted" >SYS:guest.log
 C:MakeDir RAM:T RAM:ENV RAM:Clipboards >NIL:
 Assign T: RAM:T
@@ -18,5 +19,8 @@ C:LoadWB
 Echo "guest: LoadWB done" >>SYS:guest.log
 C:Wait 5
 C:rtgtest WBINFO >>SYS:guest.log
+If EXISTS SYS:hwtest
+  Execute SYS:hwtest
+EndIf
 Echo "guest: workbench up" >>SYS:guest.log
 EndCLI >NIL:

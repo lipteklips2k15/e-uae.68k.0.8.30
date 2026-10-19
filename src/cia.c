@@ -25,6 +25,7 @@
 #include "gui.h"
 #include "savestate.h"
 #include "inputdevice.h"
+#include "akiko_c2p.h"
 #include "zfile.h"
 #include "ar.h"
 #ifdef PARALLEL_PORT
@@ -1102,6 +1103,8 @@ uae_u32 REGPARAM2 cia_bget (uaecptr addr)
     if (cd32_enabled && addr >= AKIKO_BASE && addr < AKIKO_BASE_END)
 	return akiko_bget (addr);
 #endif
+    if (akiko_c2p_range (addr))
+	return akiko_c2p_bget (addr);
     cia_wait_pre ();
     v = 0xff;
     switch ((addr >> 12) & 3) {
@@ -1139,6 +1142,8 @@ uae_u32 REGPARAM2 cia_wget (uaecptr addr)
     if (cd32_enabled && addr >= AKIKO_BASE && addr < AKIKO_BASE_END)
 	return akiko_wget (addr);
 #endif
+    if (akiko_c2p_range (addr))
+	return akiko_c2p_wget (addr);
     cia_wait_pre ();
     v = 0xffff;
     switch ((addr >> 12) & 3) {
@@ -1174,6 +1179,8 @@ uae_u32 REGPARAM2 cia_lget (uaecptr addr)
     if (cd32_enabled && addr >= AKIKO_BASE && addr < AKIKO_BASE_END)
 	return akiko_lget (addr);
 #endif
+    if (akiko_c2p_range (addr))
+	return akiko_c2p_lget (addr);
     v = cia_wget (addr) << 16;
     v |= cia_wget (addr + 2);
     return v;
@@ -1192,6 +1199,10 @@ void REGPARAM2 cia_bput (uaecptr addr, uae_u32 value)
 	return;
     }
 #endif
+    if (akiko_c2p_range (addr)) {
+	akiko_c2p_bput (addr, value);
+	return;
+    }
     cia_wait_pre ();
     if ((addr & 0x2000) == 0)
 	WriteCIAB (r, value);
@@ -1216,6 +1227,10 @@ void REGPARAM2 cia_wput (uaecptr addr, uae_u32 value)
 	return;
     }
 #endif
+    if (akiko_c2p_range (addr)) {
+	akiko_c2p_wput (addr, value);
+	return;
+    }
     cia_wait_pre ();
     if ((addr & 0x2000) == 0)
 	WriteCIAB (r, value >> 8);
@@ -1239,6 +1254,10 @@ void REGPARAM2 cia_lput (uaecptr addr, uae_u32 value)
 	return;
     }
 #endif
+    if (akiko_c2p_range (addr)) {
+	akiko_c2p_lput (addr, value);
+	return;
+    }
     cia_wput (addr, value >> 16);
     cia_wput (addr + 2, value & 0xffff);
 }

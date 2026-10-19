@@ -137,6 +137,7 @@ struct uae_prefs {
     int color_dither;
 
     int immediate_blits;
+    int akiko_c2p;              /* Akiko's chunky-to-planar converter, without the CD32 */
     unsigned int chipset_mask;
     int ntscmode;
     int genlock;

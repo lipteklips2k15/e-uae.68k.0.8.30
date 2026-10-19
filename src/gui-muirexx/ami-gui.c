@@ -20,6 +20,7 @@
 #include "uae.h"
 #include "filesys.h"
 #include "inputdevice.h"
+#include "hostdisk.h"
 
 #include <intuition/intuition.h>
 #include <libraries/asl.h>
@@ -319,6 +320,7 @@ static struct Window *gui_win;
 static int gui_pending_toggle;
 static struct Gadget *df_text[4];
 static const char *file_part (const char *path);
+static const char *disk_name (const char *path);
 
 void gui_exit (void)
 {
@@ -349,7 +351,7 @@ void gui_filename (int num, const char *name)
 	rexx_filename (num, name);
     if (gui_win && num >= 0 && num < 4 && df_text[num])
 	GT_SetGadgetAttrs (df_text[num], gui_win, NULL,
-			   GTTX_Text, name && name[0] ? file_part (name) : "(empty)", TAG_DONE);
+			   GTTX_Text, disk_name (name), TAG_DONE);
 }
 
 /****************************************************************************/
@@ -448,6 +450,8 @@ enum {
     GID_PAGE = 1,                               /* + page */
     GID_DF_INSERT = 10,                         /* + drive */
     GID_DF_EJECT = 20,                          /* + drive */
+    GID_DF_REAL = 110,                          /* + drive: the host's real one */
+    GID_AKIKO = 115,
     GID_LOADSTATE = 30, GID_SAVESTATE, GID_SOFTRESET, GID_HARDRESET,
     GID_STATELIST, GID_STATELOAD,
     GID_SOUND = 40, GID_VOLUME, GID_FRAMERATE, GID_LEDS,
@@ -534,6 +538,20 @@ static const char *file_part (const char *path)
         if (*s == '/' || *s == ':')
             p = s + 1;
     return p;
+}
+
+/* how a floppy image shows: its file name, or the real drive it is */
+static const char *disk_name (const char *path)
+{
+    static char real[24];
+    int u = hostdisk_unit (path);
+    if (!path || !path[0])
+        return "(empty)";
+    if (u >= 0) {
+        sprintf (real, "Real floppy DF%d:", u);
+        return real;
+    }
+    return file_part (path);
 }
 
 static void states_read (void)
@@ -835,12 +853,13 @@ static struct Gadget *build_page (struct Gadget *g)
     case PAGE_DRIVES:
         for (i = 0; i < 4; i++, y += ROW) {
             static const char *dfn[4] = { "DF0:", "DF1:", "DF2:", "DF3:" };
-            const char *name = currprefs.df[i][0] ? file_part (currprefs.df[i]) : "(empty)";
+            const char *name = disk_name (currprefs.df[i]);
             g = df_text[i] = mk (g, TEXT_KIND, 0, dfn[i], 44, y, 264, GH, PLACETEXT_LEFT,
                                  GTTX_Text, name, GTTX_CopyText, TRUE, GTTX_Border, TRUE, TAG_DONE);
             g = mk (g, BUTTON_KIND, GID_DF_INSERT + i, "Insert...", 314, y, 76, GH, 0, TAG_DONE);
             g = mk (g, BUTTON_KIND, GID_DF_EJECT + i, "Eject", 394, y, 68, GH, 0,
                     GA_Disabled, !currprefs.df[i][0], TAG_DONE);
+            g = mk (g, BUTTON_KIND, GID_DF_REAL + i, "Real", 466, y, 66, GH, 0, TAG_DONE);
         }
         break;
 
@@ -889,6 +908,8 @@ static struct Gadget *build_page (struct Gadget *g)
         y += ROW;
         g = mk (g, CHECKBOX_KIND, GID_COMPAT, "Compatible", 100, y, 26, 11, PLACETEXT_LEFT,
                 GTCB_Checked, changed_prefs.cpu_compatible, TAG_DONE);
+        g = mk (g, CHECKBOX_KIND, GID_AKIKO, "Akiko C2P", 330, y, 26, 11, PLACETEXT_LEFT,
+                GTCB_Checked, changed_prefs.akiko_c2p, TAG_DONE);
         y += ROW;
         g = rom_text = mk (g, TEXT_KIND, 0, "Kickstart", 100, y, 280, GH, PLACETEXT_LEFT,
                            GTTX_Text, file_part (changed_prefs.romfile), GTTX_CopyText, TRUE,
@@ -899,7 +920,7 @@ static struct Gadget *build_page (struct Gadget *g)
         g = mk (g, BUTTON_KIND, GID_SAVECFG, "Save config...", 160, y, 148, GH, 0, TAG_DONE);
         y += ROW + 4;
         g = mk (g, TEXT_KIND, 0, 0, 4, y, 460, GH, 0,
-                GTTX_Text, "CPU now; ROM and loaded configs at the next hard reset", TAG_DONE);
+                GTTX_Text, "CPU now; Akiko at a reset; ROM, configs at a hard reset", TAG_DONE);
         break;
 
     case PAGE_MEMORY: {
@@ -1192,6 +1213,22 @@ static void gui_gadget (int id, int code)
         input_apply ();
         return;
     }
+    if (id >= GID_DF_REAL && id < GID_DF_REAL + 4) {
+        int n = id - GID_DF_REAL;
+        char name[8];
+        sprintf (name, "realdf%d", n);
+        if (!hostdisk_present (n)) {
+            char msg[40];
+            sprintf (msg, "no disk in the real DF%d:", n);
+            gui_status (msg);
+            return;
+        }
+        strcpy (changed_prefs.df[n], name);
+        disk_insert (n, name);
+        show_page (PAGE_DRIVES);
+        gui_status ("real floppy in - the host's DOS keeps out of it");
+        return;
+    }
     if (id >= GID_DF_EJECT && id < GID_DF_EJECT + 4) {
         disk_eject (id - GID_DF_EJECT);
         show_page (PAGE_DRIVES);
@@ -1280,6 +1317,11 @@ static void gui_gadget (int id, int code)
 
     case GID_CPU:
         changed_prefs.cpu_level = cpu_levels[code < 0 ? 0 : code > 5 ? 5 : code];
+        break;
+    case GID_AKIKO:
+        changed_prefs.akiko_c2p = !changed_prefs.akiko_c2p;
+        gui_status (changed_prefs.akiko_c2p ? "Akiko C2P on at the next reset"
+                                             : "Akiko C2P off at the next reset");
         break;
     case GID_COMPAT:
         changed_prefs.cpu_compatible = !changed_prefs.cpu_compatible;

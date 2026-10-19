@@ -83,9 +83,17 @@ $p = Start-Process "C:\Program Files\WinUAE\winuae64.exe" -ArgumentList "-f `"$r
 if ($Setup) { 'WinUAE is up for the ScreenMode - close it yourself when done'; return }
 $t0 = Get-Date
 $guestLog = "$share\guest\sys\guest.log"
+# Read the guest's log letting it go on writing: Select-String's handle
+# refused WinUAE's writes, and an Echo >>SYS:guest.log in the guest failed
+function Read-Shared ([string]$path) {
+    try {
+        $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite, Delete')
+        try { (New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+    } catch { '' }
+}
 while (((Get-Date) - $t0).TotalSeconds -lt $Seconds) {
     Start-Sleep -Seconds 5
-    if ((Test-Path $guestLog) -and (Select-String $guestLog -Pattern 'rtgtest returned|workbench up' -Quiet)) { Start-Sleep -Seconds 3; break }
+    if ((Test-Path $guestLog) -and ((Read-Shared $guestLog) -match 'rtgtest returned|workbench up')) { Start-Sleep -Seconds 3; break }
     if (Test-Path "$share\done.txt") { break }
 }
 "elapsed $([int]((Get-Date) - $t0).TotalSeconds) s"

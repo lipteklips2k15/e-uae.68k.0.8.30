@@ -893,6 +893,7 @@ extern void closepseudodevices(void);
 extern void appw_init(struct Window *W);
 extern void appw_exit(void);
 extern void appw_events(void);
+extern void hostdisk_tick(void);    /* od-amiga/hostdisk.c */
 
 extern void gui_toggle(void);        /* ami-gui.c - Ctrl+LAlt+B opens/closes GUI */
 extern void gui_handle_events(void); /* ami-gui.c - pump GUI IDCMP while paused */
@@ -3169,6 +3170,9 @@ void handle_events(void)
         } /* end while(GetMsg) */
 
         appw_events();
+
+        /* real floppy drives: flush writes, motor off, follow disk changes */
+        hostdisk_tick ();
 
         /* --- GUI window: pump IDCMP events every frame --- */
         gui_handle_events();

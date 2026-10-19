@@ -22,6 +22,10 @@
 
 #include <zlib.h>
 
+#ifdef TARGET_AMIGAOS
+#include "hostdisk.h"   /* "realdf0".."realdf3": the host's real floppy drives */
+#endif
+
 struct zfile {
     char *name;
     char *zipname;
@@ -31,7 +35,16 @@ struct zfile {
     int seek;
     int deleteafterclose;
     struct zfile *next;
+#ifdef TARGET_AMIGAOS
+    struct hostdisk *hd;        /* a real drive: reads and writes go there */
+#endif
 };
+
+#ifdef TARGET_AMIGAOS
+#define ZHD(z) ((z)->hd != 0)
+#else
+#define ZHD(z) 0
+#endif
 
 static struct zfile *zlist = 0;
 int is_zlib;
@@ -69,6 +82,10 @@ static struct zfile *zfile_create (void)
 
 static void zfile_free (struct zfile *f)
 {
+#ifdef TARGET_AMIGAOS
+    if (f->hd)
+	hostdisk_close (f->hd);
+#endif
     if (f->f)
 	fclose (f->f);
     if (f->deleteafterclose) {
@@ -568,6 +585,19 @@ struct zfile *zfile_fopen (const char *name, const char *mode)
 
     if( *name == '\0' )
 	return NULL;
+#ifdef TARGET_AMIGAOS
+    if (hostdisk_unit (name) >= 0) {
+	struct hostdisk *hd = hostdisk_open (hostdisk_unit (name),
+					     strchr (mode, '+') || strchr (mode, 'w'));
+	if (!hd)
+	    return NULL;
+	l = zfile_create ();
+	l->name = strdup (name);
+	l->hd = hd;
+	l->size = hostdisk_size (hd);
+	return l;
+    }
+#endif
     l = zfile_create ();
     l->name = strdup (name);
 #ifdef SINGLEFILE
@@ -600,6 +630,10 @@ int zfile_exists (const char *name)
     char fname[2000];
     FILE *f;
 
+#ifdef TARGET_AMIGAOS
+    if (hostdisk_unit (name) >= 0)
+	return hostdisk_present (hostdisk_unit (name));
+#endif
     strcpy (fname, name);
     f = openzip (fname, 0);
     if (!f)
@@ -628,14 +662,14 @@ struct zfile *zfile_fopen_empty (const char *name, int size)
 
 long zfile_ftell (struct zfile *z)
 {
-    if (z->data)
+    if (z->data || ZHD (z))
 	return z->seek;
     return ftell (z->f);
 }
 
 int zfile_fseek (struct zfile *z, long offset, int mode)
 {
-    if (z->data) {
+    if (z->data || ZHD (z)) {
 	int old = z->seek;
 	switch (mode) {
 	    case SEEK_SET:
@@ -658,6 +692,15 @@ int zfile_fseek (struct zfile *z, long offset, int mode)
 size_t zfile_fread  (void *b, size_t l1, size_t l2, struct zfile *z)
 {
     long len = l1 * l2;
+#ifdef TARGET_AMIGAOS
+    if (z->hd) {
+	if (z->seek + len > z->size)
+	    len = z->size - z->seek;
+	len = hostdisk_read (z->hd, z->seek, b, len);
+	z->seek += len;
+	return len;
+    }
+#endif
     if (z->data) {
 	if (z->seek + len > z->size)
 	    len = z->size - z->seek;
@@ -671,6 +714,15 @@ size_t zfile_fread  (void *b, size_t l1, size_t l2, struct zfile *z)
 size_t zfile_fwrite  (const void *b, size_t l1, size_t l2, struct zfile *z)
 {
     long len = l1 * l2;
+#ifdef TARGET_AMIGAOS
+    if (z->hd) {
+	if (z->seek + len > z->size)
+	    len = z->size - z->seek;
+	len = hostdisk_write (z->hd, z->seek, b, len);
+	z->seek += len;
+	return len;
+    }
+#endif
     if (z->data) {
 	if (z->seek + len > z->size)
 	    len = z->size - z->seek;
@@ -746,8 +798,8 @@ uae_u32 zfile_crc32 (struct zfile *f)
     int pos, size;
     uae_u32 crc;
 
-    if (!f)
-	return 0;
+    if (!f || ZHD (f))
+	return 0;       /* a real disk: not read all through for this */
     if (f->data)
 	return get_crc32 (f->data, f->size);
     pos = zfile_ftell (f);

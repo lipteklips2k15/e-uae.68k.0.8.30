@@ -52,6 +52,7 @@
 #endif
 #include "debug.h"
 #include "akiko.h"
+#include "akiko_c2p.h"
 #if defined(ENFORCER)
 #include "enforcer.h"
 #endif
@@ -4559,6 +4560,9 @@ void customreset (void)
 
     write_log ("reset at %x\n", m68k_getpc (&regs));
     hsync_counter = 0;
+    /* Akiko C2P: Kickstart looks for it at boot, so it changes at a reset */
+    currprefs.akiko_c2p = changed_prefs.akiko_c2p;
+    akiko_c2p_reset ();
     if (! savestate_state) {
 	currprefs.chipset_mask = changed_prefs.chipset_mask;
 	if ((currprefs.chipset_mask & CSMASK_AGA) == 0) {

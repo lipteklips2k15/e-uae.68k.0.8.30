@@ -19,3 +19,6 @@ share/*.uss
 share/test
 share/*.uaerc
 share/guest/inputmon
+floppy0.adf
+share/guest/sys/hwtest
+share/guest/sys/hwtest.off

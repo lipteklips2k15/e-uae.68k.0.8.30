@@ -33,12 +33,12 @@ CORE = main newcpu fpp memory events custom serial cia blitter autoconf \
        blitfunc blittable cpustbl cpudefs cpuemu_0 cpuemu_5 cpuemu_6 \
        writelog debug identify \
        filesys fsdb fsusage hardfile filesys_unix fsdb_unix hardfile_unix \
-       scsi-none bsdsocket stubs_nodisk c99_complex_shim
+       scsi-none bsdsocket stubs_nodisk c99_complex_shim akiko_c2p
 
 SUBDIR_SRCS = \
        md-68k/support.c \
        od-amiga/main.c od-amiga/memory.c od-amiga/support.c \
-       od-amiga/ami-disk.c od-amiga/blkdev-amiga.c \
+       od-amiga/ami-disk.c od-amiga/blkdev-amiga.c od-amiga/hostdisk.c \
        gfx-amigaos/ami-win.c gfx-amigaos/ami-appw.c \
        sd-amigaos/sound.c \
        jd-amigaos/joystick.c \

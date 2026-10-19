@@ -14,3 +14,7 @@ joyport0=mouse
 joyport1=joy1
 filesystem2=rw,DH0:GuestSys:DIZ:guest/sys,0
 amiga.screen_type=public
+akiko_c2p=true
+nr_floppies=2
+floppy1type=0
+floppy1=realdf0
