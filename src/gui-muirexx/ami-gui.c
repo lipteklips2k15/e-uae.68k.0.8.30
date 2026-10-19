@@ -18,6 +18,7 @@
 #include "disk.h"
 #include "savestate.h"
 #include "uae.h"
+#include "filesys.h"
 
 #include <intuition/intuition.h>
 #include <libraries/asl.h>
@@ -439,8 +440,8 @@ void gui_fps (int fps, int idle)
 #define GH      14              /* gadget height, topaz 8 */
 #define ROW     19
 
-enum { PAGE_DRIVES, PAGE_STATE, PAGE_EMULATOR, PAGE_SETTINGS, PAGE_COUNT };
-static const char *page_names[PAGE_COUNT] = { "Drives", "State", "Emulator", "Settings" };
+enum { PAGE_DRIVES, PAGE_STATE, PAGE_EMULATOR, PAGE_SETTINGS, PAGE_MEMORY, PAGE_MOUNTS, PAGE_COUNT };
+static const char *page_names[PAGE_COUNT] = { "Drives", "State", "Emulator", "Settings", "Memory", "HD/Share" };
 
 enum {
     GID_PAGE = 1,                               /* + page */
@@ -450,8 +451,26 @@ enum {
     GID_STATELIST, GID_STATELOAD,
     GID_SOUND = 40, GID_VOLUME, GID_FRAMERATE, GID_LEDS,
     GID_LORES, GID_FULLSCREEN, GID_SCREENMODE,
-    GID_CPU = 50, GID_COMPAT, GID_ROM, GID_LOADCFG, GID_SAVECFG
+    GID_CPU = 50, GID_COMPAT, GID_ROM, GID_LOADCFG, GID_SAVECFG,
+    GID_CHIP = 60, GID_SLOW, GID_FAST, GID_Z3, GID_MEMRESET,
+    GID_MOUNTLIST = 70, GID_MOUNTDEV, GID_MOUNTVOL, GID_MOUNTPRI, GID_MOUNTRO, GID_MOUNTTYPE,
+    GID_ADDHDF, GID_ADDDIR, GID_REMOVE, GID_MOUNTRESET
 };
+
+/* Memory choices, as fix_options() in main.c allows them. Up to 8 MB of
+ * chip; Zorro II fast only with at most 2 MB chip; Z3 needs a 32-bit CPU. */
+static const char *chip_labels[] = { "256K", "512K", "1M", "2M", "4M", "8M", 0 };
+static const uae_u32 chip_sizes[] = { 0x40000, 0x80000, 0x100000, 0x200000, 0x400000, 0x800000 };
+static const char *slow_labels[] = { "None", "512K", "1M", "1.8M", 0 };
+static const uae_u32 slow_sizes[] = { 0, 0x80000, 0x100000, 0x1C0000 };
+static const char *fast_labels[] = { "None", "1M", "2M", "4M", "8M", 0 };
+static const uae_u32 fast_sizes[] = { 0, 0x100000, 0x200000, 0x400000, 0x800000 };
+static const char *z3_labels[] = { "None", "1M", "2M", "4M", "8M", "16M", "32M", "64M",
+                                   "128M", "256M", "512M", 0 };
+static const uae_u32 z3_sizes[] = { 0, 0x100000, 0x200000, 0x400000, 0x800000, 0x1000000,
+                                    0x2000000, 0x4000000, 0x8000000, 0x10000000, 0x20000000 };
+
+static const char *mtype_labels[] = { "RDB (whole disk)", "Partition 32/1/2", 0 };
 
 extern struct Window *ami_main_window (void);  /* ami-win.c */
 extern int  ami_main_on_pubscreen (void);
@@ -566,12 +585,18 @@ static void gui_status (const char *msg)
     write_log ("GUI: %s\n", msg);
 }
 
-/* An ASL file requester on the GUI's screen; the full path goes to path. */
+/* An ASL file requester on the GUI's screen; the full path goes to path.
+ * With save < 0 it picks a drawer (folder) instead of a file. */
 static int gui_asl (const char *title, const char *pattern, const char *drawer,
                     int save, char *path, int pathlen)
 {
     struct FileRequester *fr;
-    int ok = 0;
+    int ok = 0, drawers = save < 0;
+
+    if (drawers) {
+        save = 0;
+        pattern = 0;
+    }
 
     if (!AslBase && !(AslBase = OpenLibrary ("asl.library", 36))) {
         write_log ("Can't open asl.library v36.\n");
@@ -588,15 +613,19 @@ static int gui_asl (const char *title, const char *pattern, const char *drawer,
                         ASLFR_InitialPattern, pattern ? pattern : "#?",
                         ASLFR_DoPatterns,     pattern != 0,
                         ASLFR_DoSaveMode,     save,
+                        ASLFR_DrawersOnly,    drawers,
                         ASLFR_RejectIcons,    TRUE,
-                        TAG_DONE) && fr->fr_File[0]) {
+                        TAG_DONE) && (drawers ? fr->fr_Drawer[0] : fr->fr_File[0])) {
         int len;
         strncpy (path, fr->fr_Drawer, pathlen - 1);
         path[pathlen - 1] = 0;
         len = strlen (path);
-        if (len && path[len - 1] != ':' && path[len - 1] != '/' && len < pathlen - 1)
-            strcat (path, "/");
-        strncat (path, fr->fr_File, pathlen - 1 - strlen (path));
+        if (!drawers) {
+            if (len && path[len - 1] != ':' && path[len - 1] != '/' && len < pathlen - 1)
+                strcat (path, "/");
+            strncat (path, fr->fr_File, pathlen - 1 - strlen (path));
+        } else if (len > 1 && path[len - 1] == '/')
+            path[len - 1] = 0;
         ok = 1;
         /* remember the drawer for next time */
         if (title && strstr (title, "drive"))
@@ -651,15 +680,116 @@ static int cpu_index (void)
     return 0;
 }
 
+static int size_index (const uae_u32 *sizes, int n, uae_u32 size)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (sizes[i] == size)
+            return i;
+    return 0;
+}
+
+static const char *size_text (uae_u32 size, char *buf)
+{
+    if (!size)
+        strcpy (buf, "none");
+    else if (size == 0x1C0000)
+        strcpy (buf, "1.8M");
+    else if (size < 0x100000)
+        sprintf (buf, "%luK", (unsigned long) (size >> 10));
+    else
+        sprintf (buf, "%luM", (unsigned long) (size >> 20));
+    return buf;
+}
+
+static int z3_possible (void)
+{
+    return changed_prefs.cpu_level >= 2 && !changed_prefs.address_space_24;
+}
+
+/* ---- the mount list (changed_prefs.mountinfo = options_mountinfo; a hard
+ * reset copies it into the running one) ---- */
+
+static struct List   mount_list;
+static struct Node   mount_nodes[MAX_FILESYSTEM_UNITS];
+static char          mount_text[MAX_FILESYSTEM_UNITS][96];
+static int           mount_sel = -1;
+static struct Gadget *mount_dev, *mount_vol, *mount_pri, *mount_remove;
+static int           mount_ro, mount_type;
+
+static void mounts_read (void)
+{
+    int i, n = nr_units (changed_prefs.mountinfo);
+
+    mount_list.lh_Head     = (struct Node *) &mount_list.lh_Tail;
+    mount_list.lh_Tail     = 0;
+    mount_list.lh_TailPred = (struct Node *) &mount_list.lh_Head;
+    mount_sel = -1;
+
+    for (i = 0; i < n && i < MAX_FILESYSTEM_UNITS; i++) {
+        char *dev = 0, *vol = 0, *root = 0, *fsdir = 0;
+        int ro, secs, surf, res, cyls, bs, pri, flags;
+        uae_u64 size;
+
+        mount_text[i][0] = 0;
+        if (!get_filesys_unit (changed_prefs.mountinfo, i, &dev, &vol, &root, &ro, &secs,
+                               &surf, &res, &cyls, &size, &bs, &pri, &fsdir, &flags)) {
+            if (vol)
+                snprintf (mount_text[i], sizeof mount_text[i], "%s: %s = %s %s bp%d",
+                          dev ? dev : "?", vol, root ? root : "", ro ? "ro" : "rw", pri);
+            else
+                snprintf (mount_text[i], sizeof mount_text[i], "%s HDF %s %luM %s bp%d",
+                          secs ? (dev ? dev : "?") : "RDB", root ? file_part (root) : "",
+                          (unsigned long) (size >> 20), ro ? "ro" : "rw", pri);
+        }
+        free (dev); free (vol); free (root); free (fsdir);
+        memset (&mount_nodes[i], 0, sizeof mount_nodes[i]);
+        mount_nodes[i].ln_Name = mount_text[i];
+        AddTail (&mount_list, &mount_nodes[i]);
+    }
+}
+
+/* DH<n> that no unit uses yet */
+static void next_devname (char *buf)
+{
+    int n, i, units = nr_units (changed_prefs.mountinfo);
+
+    for (n = 0; n < 100; n++) {
+        sprintf (buf, "DH%d", n);
+        for (i = 0; i < units; i++) {
+            char *dev = 0, *vol = 0, *root = 0, *fsdir = 0;
+            int ro, secs, surf, res, cyls, bs, pri, flags, same;
+            uae_u64 size;
+            if (get_filesys_unit (changed_prefs.mountinfo, i, &dev, &vol, &root, &ro, &secs,
+                                  &surf, &res, &cyls, &size, &bs, &pri, &fsdir, &flags))
+                continue;
+            same = dev && !strcasecmp (dev, buf);
+            free (dev); free (vol); free (root); free (fsdir);
+            if (same)
+                break;
+        }
+        if (i == units)
+            return;
+    }
+}
+
+static const char *gadget_string (struct Gadget *g)
+{
+    return g ? (const char *) ((struct StringInfo *) g->SpecialInfo)->Buffer : "";
+}
+
 static struct Gadget *build_page (struct Gadget *g)
 {
     int i, y = 24;
+    char t1[8], t2[8], t3[8], t4[8];
+    static char running[80];
 
     df_text[0] = df_text[1] = df_text[2] = df_text[3] = 0;
     rom_text = 0;
+    mount_dev = mount_vol = mount_pri = mount_remove = 0;
 
     for (i = 0; i < PAGE_COUNT; i++)
-        g = mk (g, BUTTON_KIND, GID_PAGE + i, page_names[i], 4 + i * 116, 2, 112, GH, 0,
+        g = mk (g, BUTTON_KIND, GID_PAGE + i, page_names[i], 4 + i * 77, 2, 74, GH, 0,
                 GA_Disabled, i == gui_page, TAG_DONE);
 
     switch (gui_page) {
@@ -733,6 +863,73 @@ static struct Gadget *build_page (struct Gadget *g)
         g = mk (g, TEXT_KIND, 0, 0, 4, y, 460, GH, 0,
                 GTTX_Text, "CPU now; ROM and loaded configs at the next hard reset", TAG_DONE);
         break;
+
+    case PAGE_MEMORY: {
+        int big_chip = changed_prefs.chipmem_size > 0x200000;
+        g = mk (g, CYCLE_KIND, GID_CHIP, "Chip", 100, y, 110, GH, PLACETEXT_LEFT,
+                GTCY_Labels, chip_labels,
+                GTCY_Active, size_index (chip_sizes, 6, changed_prefs.chipmem_size), TAG_DONE);
+        y += ROW;
+        g = mk (g, CYCLE_KIND, GID_SLOW, "Slow", 100, y, 110, GH, PLACETEXT_LEFT,
+                GTCY_Labels, slow_labels,
+                GTCY_Active, size_index (slow_sizes, 4, changed_prefs.bogomem_size), TAG_DONE);
+        y += ROW;
+        g = mk (g, CYCLE_KIND, GID_FAST, "Fast (Z2)", 100, y, 110, GH, PLACETEXT_LEFT,
+                GTCY_Labels, fast_labels, GA_Disabled, big_chip,
+                GTCY_Active, size_index (fast_sizes, 5, changed_prefs.fastmem_size), TAG_DONE);
+        if (big_chip)
+            g = mk (g, TEXT_KIND, 0, 0, 220, y, 244, GH, 0,
+                    GTTX_Text, "not with more than 2M chip", TAG_DONE);
+        y += ROW;
+        g = mk (g, CYCLE_KIND, GID_Z3, "Z3 fast", 100, y, 110, GH, PLACETEXT_LEFT,
+                GTCY_Labels, z3_labels, GA_Disabled, !z3_possible (),
+                GTCY_Active, size_index (z3_sizes, 11, changed_prefs.z3fastmem_size), TAG_DONE);
+        if (!z3_possible ())
+            g = mk (g, TEXT_KIND, 0, 0, 220, y, 244, GH, 0,
+                    GTTX_Text, "needs a 32-bit 68020 or better", TAG_DONE);
+        y += ROW + 4;
+        snprintf (running, sizeof running, "Running now: chip %s, slow %s, fast %s, Z3 %s",
+                  size_text (currprefs.chipmem_size, t1), size_text (currprefs.bogomem_size, t2),
+                  size_text (currprefs.fastmem_size, t3), size_text (currprefs.z3fastmem_size, t4));
+        g = mk (g, TEXT_KIND, 0, 0, 4, y, 460, GH, 0, GTTX_Text, running, TAG_DONE);
+        y += ROW;
+        g = mk (g, BUTTON_KIND, GID_MEMRESET, "Hard reset now", 4, y, 148, GH, 0, TAG_DONE);
+        g = mk (g, TEXT_KIND, 0, 0, 160, y, 304, GH, 0,
+                GTTX_Text, "sizes apply at the next hard reset", TAG_DONE);
+        break;
+    }
+
+    case PAGE_MOUNTS: {
+        char dev[16];
+        next_devname (dev);
+        mounts_read ();
+        g = mk (g, LISTVIEW_KIND, GID_MOUNTLIST, 0, 4, y - 2, 460, 60, 0,
+                GTLV_Labels, &mount_list, GTLV_ShowSelected, 0, TAG_DONE);
+        y += 62;
+        g = mount_dev = mk (g, STRING_KIND, GID_MOUNTDEV, "Device", 60, y, 60, GH, PLACETEXT_LEFT,
+                            GTST_String, dev, GTST_MaxChars, 15, TAG_DONE);
+        g = mount_vol = mk (g, STRING_KIND, GID_MOUNTVOL, "Volume", 188, y, 104, GH, PLACETEXT_LEFT,
+                            GTST_String, "", GTST_MaxChars, 30, TAG_DONE);
+        g = mount_pri = mk (g, INTEGER_KIND, GID_MOUNTPRI, "Boot pri", 368, y, 40, GH, PLACETEXT_LEFT,
+                            GTIN_Number, -128, GTIN_MaxChars, 4, TAG_DONE);
+        g = mk (g, CHECKBOX_KIND, GID_MOUNTRO, "RO", 438, y + 1, 26, 11, PLACETEXT_LEFT,
+                GTCB_Checked, mount_ro, TAG_DONE);
+        y += ROW;
+        g = mk (g, CYCLE_KIND, GID_MOUNTTYPE, "HDF type", 76, y, 172, GH, PLACETEXT_LEFT,
+                GTCY_Labels, mtype_labels, GTCY_Active, mount_type, TAG_DONE);
+        g = mk (g, TEXT_KIND, 0, 0, 256, y, 208, GH, 0,
+                GTTX_Text, "folder: empty volume = its name", TAG_DONE);
+        y += ROW;
+        g = mk (g, BUTTON_KIND, GID_ADDHDF, "Add HDF...", 4, y, 112, GH, 0, TAG_DONE);
+        g = mk (g, BUTTON_KIND, GID_ADDDIR, "Add folder...", 120, y, 112, GH, 0, TAG_DONE);
+        g = mount_remove = mk (g, BUTTON_KIND, GID_REMOVE, "Remove", 236, y, 112, GH, 0,
+                               GA_Disabled, TRUE, TAG_DONE);
+        g = mk (g, BUTTON_KIND, GID_MOUNTRESET, "Hard reset", 352, y, 112, GH, 0, TAG_DONE);
+        y += ROW;
+        g = mk (g, TEXT_KIND, 0, 0, 4, y, 460, GH, 0,
+                GTTX_Text, "Changes take effect at the next hard reset", TAG_DONE);
+        break;
+    }
     }
     return g;
 }
@@ -1023,6 +1220,91 @@ static void gui_gadget (int id, int code)
                 gui_status ("config load failed");
         }
         break;
+    case GID_CHIP:
+        changed_prefs.chipmem_size = chip_sizes[code < 0 ? 0 : code > 5 ? 5 : code];
+        if (changed_prefs.chipmem_size > 0x200000)
+            changed_prefs.fastmem_size = 0;     /* no Z2 fast with >2M chip */
+        show_page (PAGE_MEMORY);
+        gui_status ("chip set - hard reset to apply");
+        break;
+    case GID_SLOW:
+        changed_prefs.bogomem_size = slow_sizes[code < 0 ? 0 : code > 3 ? 3 : code];
+        gui_status ("slow set - hard reset to apply");
+        break;
+    case GID_FAST:
+        changed_prefs.fastmem_size = fast_sizes[code < 0 ? 0 : code > 4 ? 4 : code];
+        gui_status ("fast set - hard reset to apply");
+        break;
+    case GID_Z3:
+        changed_prefs.z3fastmem_size = z3_sizes[code < 0 ? 0 : code > 10 ? 10 : code];
+        gui_status ("Z3 set - hard reset to apply");
+        break;
+    case GID_MEMRESET:
+    case GID_MOUNTRESET:
+        uae_reset (1);
+        gui_status ("hard reset");
+        break;
+
+    case GID_MOUNTLIST:
+        mount_sel = code;
+        if (mount_remove)
+            GT_SetGadgetAttrs (mount_remove, gui_win, NULL, GA_Disabled, FALSE, TAG_DONE);
+        break;
+    case GID_MOUNTRO:
+        mount_ro = !mount_ro;
+        break;
+    case GID_MOUNTTYPE:
+        mount_type = code;
+        break;
+    case GID_REMOVE:
+        if (mount_sel >= 0 && !kill_filesys_unit (changed_prefs.mountinfo, mount_sel)) {
+            show_page (PAGE_MOUNTS);
+            gui_status ("removed - hard reset to apply");
+        }
+        break;
+    case GID_ADDHDF:
+    case GID_ADDDIR: {
+        int dir = id == GID_ADDDIR;
+        const char *err;
+        char dev[16], vol[32];
+        int pri = mount_pri ? (int) ((struct StringInfo *) mount_pri->SpecialInfo)->LongInt : 0;
+
+        if (!gui_asl (dir ? "Folder to share" : "Hard disk image (HDF)", dir ? 0 : "#?.(hdf|hdz|img)",
+                      0, dir ? -1 : 0, path, sizeof path))
+            break;
+        strncpy (dev, gadget_string (mount_dev), sizeof dev - 1);
+        dev[sizeof dev - 1] = 0;
+        if (!dev[0])
+            next_devname (dev);
+        if (dev[strlen (dev) - 1] == ':')
+            dev[strlen (dev) - 1] = 0;
+        if (dir) {
+            strncpy (vol, gadget_string (mount_vol), sizeof vol - 1);
+            vol[sizeof vol - 1] = 0;
+            if (!vol[0]) {                       /* the folder's own name */
+                const char *p = file_part (path);
+                strncpy (vol, *p ? p : path, sizeof vol - 1);
+                vol[sizeof vol - 1] = 0;
+                if (vol[0] && vol[strlen (vol) - 1] == ':')
+                    vol[strlen (vol) - 1] = 0;
+            }
+            err = add_filesys_unit (changed_prefs.mountinfo, dev, vol, path, mount_ro,
+                                    0, 0, 0, 0, pri, 0, 0);
+        } else if (mount_type == 0)              /* RDB: geometry from the disk */
+            err = add_filesys_unit (changed_prefs.mountinfo, dev, 0, path, mount_ro,
+                                    0, 0, 0, 512, pri, 0, 0);
+        else                                     /* a single partition image */
+            err = add_filesys_unit (changed_prefs.mountinfo, dev, 0, path, mount_ro,
+                                    32, 1, 2, 512, pri, 0, 0);
+        if (err)
+            gui_status (err);
+        else {
+            show_page (PAGE_MOUNTS);
+            gui_status ("added - hard reset to apply");
+        }
+        break;
+    }
+
     case GID_SAVECFG:
         if (gui_asl ("Save configuration as", 0, 0, 1, path, sizeof path))
             gui_status (cfgfile_save (&currprefs, path, 0) ? "config saved" : "config save failed");
