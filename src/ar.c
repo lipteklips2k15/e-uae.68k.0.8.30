@@ -1193,6 +1193,7 @@ static void action_replay_setbanks (void)
             break;
         }
    }
+    memory_direct_refresh ();   /* chip writes through the cartridge now */
 }
 
 static void action_replay_unsetbanks (void)
@@ -1200,6 +1201,7 @@ static void action_replay_unsetbanks (void)
     chipmem_bank.bput = chipmem_bput;
     chipmem_bank.wput = chipmem_wput;
     chipmem_bank.lput = chipmem_lput;
+    memory_direct_refresh ();
 }
 
 /* param to allow us to unload the cart. Currently we know it is safe if we are doing a reset to unload it.*/

@@ -559,6 +559,7 @@ int enforcer_enable (void)
 
 	enforcer_installed = 1;
     }
+    memory_direct_refresh ();	/* chip RAM through the Enforcer now */
     write_log ("Enforcer enabled\n");
     return 1;
 }
@@ -574,6 +575,7 @@ int enforcer_disable (void)
 
 	enforcer_installed = 0;
     }
+    memory_direct_refresh ();
     return 1;
 }
 

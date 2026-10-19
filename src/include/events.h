@@ -87,8 +87,18 @@ STATIC_INLINE void do_cycles (unsigned int cycles_to_add)
 #endif
 
     if (is_lastline && eventtab[ev_hsync].evtime - currcycle <= cycles_to_add) {
-	frame_time_t rpt = uae_gethrtime ();
-	frame_time_t v   = rpt - vsyncmintime;
+	/* The CPU's spare time at the end of a frame, until the frame's real
+	 * time is up. Reading the time is costly (AmigaOS: ReadEClock, CIA
+	 * reads - over the bus on a PiStorm), and was done for every
+	 * instruction here: look only every LASTLINE_TIME_EVERY-th time. */
+#define LASTLINE_TIME_EVERY 1024
+	static int time_skip;
+	frame_time_t rpt, v;
+	if (time_skip-- > 0)
+	    return;
+	time_skip = LASTLINE_TIME_EVERY;
+	rpt = uae_gethrtime ();
+	v   = rpt - vsyncmintime;
 	if (v > syncbase || v < -(syncbase))
 	    vsyncmintime = rpt;
 	if (v < 0) {
@@ -97,6 +107,7 @@ STATIC_INLINE void do_cycles (unsigned int cycles_to_add)
 #endif
 	    return;
 	}
+	time_skip = 0;          /* time's up: the next frame looks at once */
     }
 
     while ((nextevent - currcycle) <= cycles_to_add) {

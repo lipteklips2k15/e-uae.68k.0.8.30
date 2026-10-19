@@ -1346,5 +1346,22 @@ const uae_u8 *restore_expansion (const uae_u8 *src)
     gfxmem_start = restore_u32 ();
     return src;
 }
+#endif /* SAVESTATE */
+
+/* For memory.c's direct RAM access: b's handlers are still the plain fast
+ * or Z3 RAM ones - 1 for the reads, 2 for the writes. */
+int expansion_plain_ram (const addrbank *b)
+{
+    int k = 0;
+
+    if ((b->lget == fastmem_lget && b->wget == fastmem_wget && b->bget == fastmem_bget)
+	|| (b->lget == z3fastmem_lget && b->wget == z3fastmem_wget && b->bget == z3fastmem_bget))
+	k |= 1;
+    if ((b->lput == fastmem_lput && b->wput == fastmem_wput && b->bput == fastmem_bput)
+	|| (b->lput == z3fastmem_lput && b->wput == z3fastmem_wput && b->bput == z3fastmem_bput))
+	k |= 2;
+    return k;
+}
+#ifdef SAVESTATE
 
 #endif /* SAVESTATE */

@@ -121,6 +121,20 @@ extern uae_u8 *baseaddr[MEMORY_BANKS];
 
 #define get_mem_bank(addr) (*mem_banks[bankindex(addr)])
 
+/*
+ * Direct RAM access: for a 64K page of plain RAM (the bank's handlers are
+ * the ordinary chip/slow/fast/Z3/ROM ones), mem_rdirect/mem_wdirect hold p
+ * with host address = p + guest address, so get_long() & co. need no
+ * call through the bank - an indirect jump per access, which Emu68 makes
+ * expensive. 0: through the bank as before. Kept by put_mem_bank();
+ * memory_direct_refresh() after handlers are swapped (Action Replay,
+ * Enforcer, memwatch) or memory moved.
+ */
+extern uae_u8 *mem_rdirect[MEMORY_BANKS];
+extern uae_u8 *mem_wdirect[MEMORY_BANKS];
+extern void memory_direct_set (unsigned int bank, uae_u32 offset);
+extern void memory_direct_refresh (void);
+
 #ifdef JIT
 # define put_mem_bank(addr, b, realstart) do { \
     (mem_banks[bankindex(addr)] = (b)); \
@@ -128,10 +142,13 @@ extern uae_u8 *baseaddr[MEMORY_BANKS];
         baseaddr[bankindex(addr)] = (b)->baseaddr - (realstart); \
     else \
         baseaddr[bankindex(addr)] = (uae_u8*)(((long)b)+1); \
+    memory_direct_set (bankindex (addr), (addr) - (realstart)); \
 } while (0)
 #else
-# define put_mem_bank(addr, b, realstart) \
-    (mem_banks[bankindex(addr)] = (b));
+# define put_mem_bank(addr, b, realstart) do { \
+    (mem_banks[bankindex(addr)] = (b)); \
+    memory_direct_set (bankindex (addr), (addr) - (realstart)); \
+} while (0)
 #endif
 
 extern void memory_init (void);
@@ -148,17 +165,29 @@ extern void map_overlay (int chip);
 
 STATIC_INLINE uae_u32 get_long(uaecptr addr)
 {
+    uae_u8 *p;
     addr &= MEMORY_RANGE_MASK;
+    p = mem_rdirect[bankindex (addr)];
+    if (p)
+	return do_get_mem_long ((uae_u32 *) (p + addr));
     return longget(addr);
 }
 STATIC_INLINE uae_u32 get_word(uaecptr addr)
 {
+    uae_u8 *p;
     addr &= MEMORY_RANGE_MASK;
+    p = mem_rdirect[bankindex (addr)];
+    if (p)
+	return do_get_mem_word ((uae_u16 *) (p + addr));
     return wordget(addr);
 }
 STATIC_INLINE uae_u32 get_byte(uaecptr addr)
 {
+    uae_u8 *p;
     addr &= MEMORY_RANGE_MASK;
+    p = mem_rdirect[bankindex (addr)];
+    if (p)
+	return p[addr];
     return byteget(addr);
 }
 /*
@@ -192,17 +221,35 @@ STATIC_INLINE void *get_pointer (uaecptr addr)
 #endif
 STATIC_INLINE void put_long(uaecptr addr, uae_u32 l)
 {
+    uae_u8 *p;
     addr &= MEMORY_RANGE_MASK;
+    p = mem_wdirect[bankindex (addr)];
+    if (p) {
+	do_put_mem_long ((uae_u32 *) (p + addr), l);
+	return;
+    }
     longput(addr, l);
 }
 STATIC_INLINE void put_word(uaecptr addr, uae_u32 w)
 {
+    uae_u8 *p;
     addr &= MEMORY_RANGE_MASK;
+    p = mem_wdirect[bankindex (addr)];
+    if (p) {
+	do_put_mem_word ((uae_u16 *) (p + addr), w);
+	return;
+    }
     wordput(addr, w);
 }
 STATIC_INLINE void put_byte(uaecptr addr, uae_u32 b)
 {
+    uae_u8 *p;
     addr &= MEMORY_RANGE_MASK;
+    p = mem_wdirect[bankindex (addr)];
+    if (p) {
+	p[addr] = b;
+	return;
+    }
     byteput(addr, b);
 }
 /*

@@ -22,3 +22,5 @@ share/guest/inputmon
 floppy0.adf
 share/guest/sys/hwtest
 share/guest/sys/hwtest.off
+share/guest/sys/bench.off
+share/guest/sys/mark?

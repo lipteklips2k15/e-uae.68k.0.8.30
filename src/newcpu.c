@@ -264,6 +264,7 @@ void check_prefs_changed_cpu (void)
 	currprefs.cpu_cycle_exact = changed_prefs.cpu_cycle_exact;
 	currprefs.blitter_cycle_exact = changed_prefs.cpu_cycle_exact;
 	build_cpufunctbl ();
+	memory_direct_refresh ();       /* cycle-exact: no direct RAM access */
 
 	/* Force opcode handler loop to exit. We don't want it to
 	 * carry on running with the old opcode handler table. */

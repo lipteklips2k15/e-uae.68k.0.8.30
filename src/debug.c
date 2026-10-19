@@ -853,6 +853,7 @@ static void deinitialize_memwatch (void)
     free (debug_mem_banks);
     debug_mem_banks = 0;
     memwatch_enabled = 0;
+    memory_direct_refresh ();
     free (illgdebug);
     illgdebug = 0;
 }
@@ -882,6 +883,7 @@ static int initialize_memwatch (void)
 	a2->xlateaddr = debug_xlate;
     }
     memwatch_enabled = 1;
+    memory_direct_refresh ();	/* every access through the watch */
     return 1;
 }
 

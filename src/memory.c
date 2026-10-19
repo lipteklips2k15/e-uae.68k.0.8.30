@@ -58,6 +58,76 @@ static size_t rom_filepos;
 
 addrbank *mem_banks[MEMORY_BANKS];
 
+/* Direct RAM access (memory.h): host address = mem_rdirect[page] + guest
+ * address for reads, mem_wdirect for writes; 0 = through the bank.
+ * mem_direct_off: the page's offset in its bank's memory, so the tables
+ * can be rebuilt when handlers are swapped or memory moves. */
+uae_u8 *mem_rdirect[MEMORY_BANKS];
+uae_u8 *mem_wdirect[MEMORY_BANKS];
+static uae_u32 mem_direct_off[MEMORY_BANKS];
+
+extern int expansion_plain_ram (const addrbank *b);   /* expansion.c: fast, Z3 */
+static uae_u32 bogomem_lget (uaecptr) REGPARAM;
+static uae_u32 bogomem_wget (uaecptr) REGPARAM;
+static uae_u32 bogomem_bget (uaecptr) REGPARAM;
+static void bogomem_lput (uaecptr, uae_u32) REGPARAM;
+static void bogomem_wput (uaecptr, uae_u32) REGPARAM;
+static void bogomem_bput (uaecptr, uae_u32) REGPARAM;
+static uae_u32 kickmem_lget (uaecptr) REGPARAM;
+static uae_u32 kickmem_wget (uaecptr) REGPARAM;
+static uae_u32 kickmem_bget (uaecptr) REGPARAM;
+
+/* a bank whose handlers are still the plain RAM ones: 1 read, 2 write */
+static int direct_kind (const addrbank *b)
+{
+    int k = 0;
+
+    if (!b || !b->baseaddr)
+	return 0;
+    if ((b->lget == chipmem_lget && b->wget == chipmem_wget && b->bget == chipmem_bget)
+	|| (b->lget == bogomem_lget && b->wget == bogomem_wget && b->bget == bogomem_bget)
+	|| (b->lget == kickmem_lget && b->wget == kickmem_wget && b->bget == kickmem_bget))
+	k |= 1;
+    /* writes: RAM only (ROM writes are ignored, the card's are watched) */
+    if ((b->lput == chipmem_lput && b->wput == chipmem_wput && b->bput == chipmem_bput)
+	|| (b->lput == bogomem_lput && b->wput == bogomem_wput && b->bput == bogomem_bput)
+)
+	k |= 2;
+    return k | expansion_plain_ram (b);
+}
+
+static void direct_page (unsigned int page)
+{
+    static int disabled = -1;   /* EUAE_NODIRECT set: off, for comparisons */
+    const addrbank *b = mem_banks[page];
+    int k;
+
+    if (disabled < 0) {
+	disabled = getenv ("EUAE_NODIRECT") != 0;
+	if (disabled)
+	    write_log ("MEMORY: direct RAM access off (EUAE_NODIRECT)\n");
+    }
+    k = currprefs.cpu_cycle_exact || disabled ? 0 : direct_kind (b);  /* CE: chip timing */
+    uae_u8 *p = k ? b->baseaddr + mem_direct_off[page] - ((uae_u32) page << 16) : 0;
+
+    mem_rdirect[page] = (k & 1) ? p : 0;
+    mem_wdirect[page] = (k & 2) ? p : 0;
+}
+
+void memory_direct_set (unsigned int page, uae_u32 offset)
+{
+    mem_direct_off[page] = offset;
+    direct_page (page);
+}
+
+void memory_direct_refresh (void)
+{
+    unsigned int page;
+
+    for (page = 0; page < MEMORY_BANKS; page++)
+	direct_page (page);
+}
+
 #ifdef JIT
 /* This has two functions. It either holds a host address that, when added
    to the 68k address, gives the host address corresponding to that 68k
@@ -1743,6 +1813,7 @@ void memory_reset (void)
     #endif
     #endif
 #endif
+    memory_direct_refresh ();	/* memory may have moved */
 }
 
 void memory_init (void)
