@@ -1,0 +1,16 @@
+use_gui=no
+kickstart_rom_file=DIZ:guest/kick.rom
+cpu_type=68040
+cpu_24bit_addressing=no
+cpu_compatible=no
+cpu_speed=max
+chipset=aga
+chipmem_size=4
+fastmem_size=0
+z3mem_size=16
+gfxcard_size=16
+sound_output=normal
+joyport0=mouse
+joyport1=joy1
+amiga.screen_type=public
+hardfile2=rw,DH0:DIZ:hdf/AGS_Classic_AGA_KickstartFix_v30.img,0,0,0,512,0,
