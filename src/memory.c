@@ -98,7 +98,7 @@ static int direct_kind (const addrbank *b)
 
 static void direct_page (unsigned int page)
 {
-    static int disabled = -1;   /* EUAE_NODIRECT set: off, for comparisons */
+    static int disabled = -1;   /* EUAE_NODIRECT set: off, whatever prefs say */
     const addrbank *b = mem_banks[page];
     int k;
 
@@ -107,7 +107,8 @@ static void direct_page (unsigned int page)
 	if (disabled)
 	    write_log ("MEMORY: direct RAM access off (EUAE_NODIRECT)\n");
     }
-    k = currprefs.cpu_cycle_exact || disabled ? 0 : direct_kind (b);  /* CE: chip timing */
+    /* prefs direct_ram (GUI: CPU page), off in cycle-exact mode (chip timing) */
+    k = currprefs.cpu_cycle_exact || disabled || !currprefs.direct_ram ? 0 : direct_kind (b);
     uae_u8 *p = k ? b->baseaddr + mem_direct_off[page] - ((uae_u32) page << 16) : 0;
 
     mem_rdirect[page] = (k & 1) ? p : 0;

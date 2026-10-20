@@ -102,6 +102,16 @@ STATIC_INLINE void sync_copper (unsigned int hpos);
 
 unsigned int is_lastline;
 
+/* cpu_speed=max: the clock is read every this many instructions on the
+ * last line (events.h do_cycles); prefs cpu_timecheck */
+int lastline_time_every = 1024;
+
+void custom_set_timecheck (int n)
+{
+    currprefs.cpu_timecheck = changed_prefs.cpu_timecheck = n;
+    lastline_time_every = n < 1 ? 1 : n > 65536 ? 65536 : n;
+}
+
 static int rpt_did_reset;
 
 volatile frame_time_t vsynctime, vsyncmintime;
@@ -4563,6 +4573,7 @@ void customreset (void)
     /* Akiko C2P: Kickstart looks for it at boot, so it changes at a reset */
     currprefs.akiko_c2p = changed_prefs.akiko_c2p;
     akiko_c2p_reset ();
+    custom_set_timecheck (changed_prefs.cpu_timecheck);
     if (! savestate_state) {
 	currprefs.chipset_mask = changed_prefs.chipset_mask;
 	if ((currprefs.chipset_mask & CSMASK_AGA) == 0) {

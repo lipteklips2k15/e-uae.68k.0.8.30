@@ -52,7 +52,7 @@ static const struct cfg_lines opttable[] =
     {"use_debugger", "Enable the debugger?" },
 #endif
     {"cpu_speed", "can be max, real, or a number between 1 and 20" },
-    {"cpu_type", "Can be 68000, 68010, 68020, 68020/68881" },
+    {"cpu_type", "Can be 68000, 68010, 68020, 68020/68881, 68030, 68040, 68060" },
     {"cpu_compatible", "yes enables compatibility-mode" },
     {"cpu_24bit_addressing", "must be set to 'no' in order for Z3mem or P96mem to work" },
     {"log_illegal_mem", "print illegal memory access by Amiga software?" },
@@ -517,6 +517,8 @@ void save_options (FILE *f, const struct uae_prefs *p, int type)
 
     cfgfile_write (f, "immediate_blits=%s\n", p->immediate_blits ? "true" : "false");
     cfgfile_write (f, "akiko_c2p=%s\n", p->akiko_c2p ? "true" : "false");
+    cfgfile_write (f, "direct_ram=%s\n", p->direct_ram ? "true" : "false");
+    cfgfile_write (f, "cpu_time_check=%d\n", p->cpu_timecheck);
     cfgfile_write (f, "ntsc=%s\n", p->ntscmode ? "true" : "false");
     cfgfile_write (f, "hide_cursor=%s\n", p->hide_cursor ? "true" : "false");
     cfgfile_write (f, "show_leds=%s\n", p->leds_on_screen ? "true" : "false");
@@ -546,7 +548,10 @@ void save_options (FILE *f, const struct uae_prefs *p, int type)
     else
 	cfgfile_write (f, "cpu_speed=%s\n", p->m68k_speed == -1 ? "max" : "real");
 
-    cfgfile_write (f, "cpu_type=%s\n", cpumode[p->cpu_level * 2 + !p->address_space_24]);
+    if (p->cpu_030 && p->cpu_level == 3)
+	cfgfile_write (f, "cpu_type=%s\n", p->address_space_24 ? "68ec030" : "68030");
+    else
+	cfgfile_write (f, "cpu_type=%s\n", cpumode[p->cpu_level * 2 + !p->address_space_24]);
     cfgfile_write (f, "cpu_compatible=%s\n", p->cpu_compatible ? "true" : "false");
     cfgfile_write (f, "cpu_cycle_exact=%s\n", p->cpu_cycle_exact ? "true" : "false");
     cfgfile_write (f, "blitter_cycle_exact=%s\n", p->blitter_cycle_exact ? "true" : "false");
@@ -1109,6 +1114,9 @@ static int cfgfile_parse_hardware (struct uae_prefs *p, char *option, char *valu
 
     if (cfgfile_yesno (option, value, "akiko_c2p", &p->akiko_c2p))
 	return 1;
+    if (cfgfile_yesno (option, value, "direct_ram", &p->direct_ram)
+	|| cfgfile_intval (option, value, "cpu_time_check", &p->cpu_timecheck, 1))
+	return 1;
     if (cfgfile_yesno (option, value, "immediate_blits", &p->immediate_blits)
 	|| cfgfile_yesno (option, value, "kickshifter", &p->kickshifter)
 	|| cfgfile_yesno (option, value, "ntsc", &p->ntscmode)
@@ -1198,9 +1206,18 @@ static int cfgfile_parse_hardware (struct uae_prefs *p, char *option, char *valu
 	return 1;
     }
 
+    /* 68030: the 68020+FPU core (level 3) with prefs cpu_030 */
+    if (strcmp (option, "cpu_type") == 0
+	&& (strcasecmp (value, "68030") == 0 || strcasecmp (value, "68ec030") == 0)) {
+	p->cpu_level = 3;
+	p->cpu_030 = 1;
+	p->address_space_24 = strcasecmp (value, "68ec030") == 0;
+	return 1;
+    }
     if (cfgfile_strval (option, value, "cpu_type", &p->cpu_level, cpumode, 0)) {
 	p->address_space_24 = p->cpu_level < 8 && !(p->cpu_level & 1);
 	p->cpu_level >>= 1;
+	p->cpu_030 = 0;
 	return 1;
     }
     if (p->config_version < (21 << 16)) {
@@ -2428,6 +2445,9 @@ void default_prefs (struct uae_prefs *p, int type)
 
     p->immediate_blits = 0;
     p->akiko_c2p = 0;
+    p->cpu_030 = 0;
+    p->direct_ram = 1;
+    p->cpu_timecheck = 1024;
     p->collision_level = 2;
     p->leds_on_screen = 0;
     p->hide_cursor = 1;

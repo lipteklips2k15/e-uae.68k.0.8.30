@@ -152,6 +152,8 @@ static unsigned long REGPARAM2 op_illg_1 (uae_u32 opcode, struct regstruct *regs
     return 4;
 }
 
+void mmu030_install (void);       /* below: the 68030's MMU instructions */
+
 static void build_cpufunctbl (void)
 {
     int i, opcnt;
@@ -214,10 +216,12 @@ static void build_cpufunctbl (void)
 	    opcnt++;
 	}
     }
-    write_log ("Building CPU function table, %d opcodes (%d %d %d).\n",
+    write_log ("Building CPU function table, %d opcodes (%d %d %d)%s.\n",
 	opcnt, currprefs.cpu_level,
 	currprefs.cpu_cycle_exact ? -1 : currprefs.cpu_compatible ? 1 : 0,
-	currprefs.address_space_24);
+	currprefs.address_space_24,
+	currprefs.cpu_030 && currprefs.cpu_level == 3 ? ", as a 68030" : "");
+    mmu030_install ();          /* 68030: its MMU instructions */
 #ifdef JIT
     build_comp ();
 #endif
@@ -253,6 +257,7 @@ static void update_68k_cycles (void)
 void check_prefs_changed_cpu (void)
 {
     if (currprefs.cpu_level != changed_prefs.cpu_level
+	|| currprefs.cpu_030 != changed_prefs.cpu_030
 	|| currprefs.cpu_compatible != changed_prefs.cpu_compatible
 	|| currprefs.cpu_cycle_exact != changed_prefs.cpu_cycle_exact) {
 
@@ -260,6 +265,7 @@ void check_prefs_changed_cpu (void)
 	    fill_prefetch_slow (&regs);
 
 	currprefs.cpu_level = changed_prefs.cpu_level;
+	currprefs.cpu_030 = changed_prefs.cpu_030;
 	currprefs.cpu_compatible = changed_prefs.cpu_compatible;
 	currprefs.cpu_cycle_exact = changed_prefs.cpu_cycle_exact;
 	currprefs.blitter_cycle_exact = changed_prefs.cpu_cycle_exact;
@@ -1056,7 +1062,10 @@ int m68k_move2c (int regno, uae_u32 *regp)
 	case 0: regs.sfc = *regp & 7; break;
 	case 1: regs.dfc = *regp & 7; break;
 	case 2:
-	    cacr = *regp & (currprefs.cpu_level < 4 ? 0x3 : (currprefs.cpu_level == 4 ? 0x80008000 : 0xf8800e00));
+	    /* 68030: data cache bits too (ED FD DBE WA, IBE) - Exec tells a
+	       68030 from a 68020 by them; CI/CD clear and read back as 0 */
+	    cacr = *regp & (currprefs.cpu_level < 4 ? (currprefs.cpu_030 && currprefs.cpu_level == 3 ? 0x3313 : 0x3)
+			    : (currprefs.cpu_level == 4 ? 0x80008000 : 0xf8800e00));
 #ifdef JIT
 	    if (currprefs.cpu_level < 4) {
 		set_cache_state (cacr & 1);
@@ -1531,6 +1540,126 @@ void mmu_op(uae_u32 opcode, struct regstruct *regs, uae_u16 extra)
 }
 
 #endif
+
+/*
+ * The 68030's MMU instructions (opcodes $F000-$F03F + extension word), for
+ * prefs cpu_030. No address translation: the registers are kept and read
+ * back - what OS 3.x/SetPatch do on a 68030 (switch the MMU off, set the
+ * transparent translation) then works. PFLUSH/PLOAD do nothing, PTEST
+ * finds nothing. Programs that really map memory with the MMU (Enforcer,
+ * MuForce, VMM) get no mapping.
+ */
+static uae_u32 tt030[2], srp030[2], crp030[2];
+static uae_u16 mmusr030;
+
+/* the effective address of the operand (mode/reg of the opcode); the
+   extension words after the instruction's own are consumed */
+static int ea030 (uae_u32 opcode, struct regstruct *regs, int size, uaecptr *ea)
+{
+    int reg = opcode & 7;
+    uaecptr pc;
+
+    switch ((opcode >> 3) & 7) {
+    case 2: *ea = m68k_areg (regs, reg); return 1;
+    case 3: *ea = m68k_areg (regs, reg); m68k_areg (regs, reg) += size; return 1;
+    case 4: m68k_areg (regs, reg) -= size; *ea = m68k_areg (regs, reg); return 1;
+    case 5: *ea = m68k_areg (regs, reg) + (uae_s32) (uae_s16) next_iword (regs); return 1;
+    case 6: *ea = get_disp_ea_020 (regs, m68k_areg (regs, reg), next_iword (regs)); return 1;
+    case 7:
+	switch (reg) {
+	case 0: *ea = (uae_s32) (uae_s16) next_iword (regs); return 1;
+	case 1: *ea = next_ilong (regs); return 1;
+	case 2: pc = m68k_getpc (regs); *ea = pc + (uae_s32) (uae_s16) next_iword (regs); return 1;
+	case 3: pc = m68k_getpc (regs); *ea = get_disp_ea_020 (regs, pc, next_iword (regs)); return 1;
+	}
+    }
+    return 0;           /* Dn/An or immediate: not for these */
+}
+
+static unsigned long REGPARAM2 op_mmu030 (uae_u32 opcode, struct regstruct *regs)
+{
+    uaecptr oldpc = m68k_getpc (regs);
+    uae_u16 ext = get_iword (regs, 2);
+    int store = (ext >> 9) & 1;         /* PMOVE: 1 MMU register -> <ea> */
+    int preg = (ext >> 10) & 7;
+    uaecptr ea;
+
+    if (!regs->s) {
+	Exception (8, regs, 0);
+	return 4;
+    }
+    m68k_incpc (regs, 4);               /* past opcode and extension word */
+
+    switch (ext >> 13) {
+    case 0:                             /* PMOVE TT0/TT1 */
+    case 2:                             /* PMOVE TC/SRP/CRP */
+    case 3: {                           /* PMOVE MMUSR */
+	uae_u32 *r = 0;
+	int longs = 1, word = 0;
+
+	if ((ext >> 13) == 0 && (preg == 2 || preg == 3))
+	    r = &tt030[preg - 2];
+	else if ((ext >> 13) == 2 && preg == 0)
+	    r = &tc;
+	else if ((ext >> 13) == 2 && preg == 2)
+	    r = srp030, longs = 2;
+	else if ((ext >> 13) == 2 && preg == 3)
+	    r = crp030, longs = 2;
+	else if ((ext >> 13) == 3 && preg == 0)
+	    word = 1;
+	else
+	    break;
+	if (!ea030 (opcode, regs, word ? 2 : longs * 4, &ea))
+	    break;
+	if (word) {
+	    if (store)
+		put_word (ea, mmusr030);
+	    else
+		mmusr030 = get_word (ea);
+	} else if (store) {
+	    put_long (ea, r[0]);
+	    if (longs == 2)
+		put_long (ea + 4, r[1]);
+	} else {
+	    r[0] = get_long (ea);
+	    if (longs == 2)
+		r[1] = get_long (ea + 4);
+	    if (r == &tc && (tc & 0x80000000)) {
+		static int told;
+		if (!told++)
+		    write_log ("68030: the guest switched the MMU on - no translation emulated\n");
+	    }
+	}
+	return 4;
+    }
+    case 1:                             /* PFLUSH, PFLUSHA, PLOAD */
+	if (preg == 6 || preg == 0)         /* the forms with an <ea> */
+	    if (!ea030 (opcode, regs, 4, &ea))
+		break;
+	return 4;
+    case 4:                             /* PTEST */
+	if (!ea030 (opcode, regs, 4, &ea))
+	    break;
+	mmusr030 = 0;
+	if (ext & 0x100)                    /* address register for the descriptor */
+	    m68k_areg (regs, (ext >> 5) & 7) = 0;
+	return 4;
+    }
+    /* not a 68030 MMU instruction after all: F-line exception as before */
+    m68k_setpc (regs, oldpc);
+    op_illg (opcode, regs);
+    return 4;
+}
+
+void mmu030_install (void)
+{
+    unsigned int op;
+
+    if (!currprefs.cpu_030 || currprefs.cpu_level != 3)
+	return;
+    for (op = 0xf000; op < 0xf040; op++)
+	cpufunctbl[op] = op_mmu030;
+}
 
 static uaecptr last_trace_ad = 0;
 
@@ -2276,7 +2405,12 @@ const uae_u8 *restore_cpu (const uae_u8 *src)
     uae_u32 l;
 
     model = restore_u32 ();
+    changed_prefs.cpu_030 = 0;
     switch (model) {
+    case 68030:                         /* E-UAE's: the 68020+FPU core as a 68030 */
+	changed_prefs.cpu_level = 3;
+	changed_prefs.cpu_030 = 1;
+	break;
     case 68000:
 	changed_prefs.cpu_level = 0;
 	break;
@@ -2347,7 +2481,8 @@ void restore_cpu_finish (void)
     m68k_setpc (&regs, regs.pc);
 }
 
-static const int cpumodel[] = { 68000, 68010, 68020, 68020, 68040, 68060 };
+/* by cpu_level (5 is unused; the 68060 is 6 - the table stopped at 5) */
+static const int cpumodel[] = { 68000, 68010, 68020, 68020, 68040, 68040, 68060 };
 
 uae_u8 *save_cpu (uae_u32 *len, uae_u8 *dstptr)
 {
@@ -2358,7 +2493,7 @@ uae_u8 *save_cpu (uae_u32 *len, uae_u8 *dstptr)
 	dstbak = dst = dstptr;
     else
 	dstbak = dst = malloc(4+4+15*4+4+4+4+4+2+4+4+4+4+4+4+4);
-    model = cpumodel[currprefs.cpu_level];
+    model = currprefs.cpu_030 && currprefs.cpu_level == 3 ? 68030 : cpumodel[currprefs.cpu_level];
     save_u32 (model);					/* MODEL */
     save_u32 (currprefs.address_space_24 ? 1 : 0);	/* FLAGS */
     for (i = 0; i < 15; i++) save_u32 (regs.regs[i]);	/* D0-D7 A0-A6 */

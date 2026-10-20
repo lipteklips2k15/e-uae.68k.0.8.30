@@ -138,6 +138,8 @@ struct uae_prefs {
 
     int immediate_blits;
     int akiko_c2p;              /* Akiko's chunky-to-planar converter, without the CD32 */
+    int direct_ram;             /* direct RAM access (memory.h), on by default */
+    int cpu_timecheck;          /* cpu_speed=max: read the clock every n instructions */
     unsigned int chipset_mask;
     int ntscmode;
     int genlock;
@@ -172,6 +174,7 @@ struct uae_prefs {
 
     int m68k_speed;
     int cpu_level;
+    int cpu_030;                /* with cpu_level 3 (68020+FPU): a 68030+68882, no MMU */
     int cpu_compatible;
     int address_space_24;
 

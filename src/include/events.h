@@ -45,6 +45,8 @@ extern void do_cycles_ce (long cycles);
 
 extern unsigned long currcycle;
 extern unsigned int is_lastline;
+extern int lastline_time_every;         /* custom.c, from prefs cpu_timecheck */
+extern void custom_set_timecheck (int n);
 
 extern unsigned long nextevent;
 
@@ -90,13 +92,13 @@ STATIC_INLINE void do_cycles (unsigned int cycles_to_add)
 	/* The CPU's spare time at the end of a frame, until the frame's real
 	 * time is up. Reading the time is costly (AmigaOS: ReadEClock, CIA
 	 * reads - over the bus on a PiStorm), and was done for every
-	 * instruction here: look only every LASTLINE_TIME_EVERY-th time. */
-#define LASTLINE_TIME_EVERY 1024
+	 * instruction here: look only every lastline_time_every-th time
+	 * (prefs cpu_timecheck). */
 	static int time_skip;
 	frame_time_t rpt, v;
 	if (time_skip-- > 0)
 	    return;
-	time_skip = LASTLINE_TIME_EVERY;
+	time_skip = lastline_time_every;
 	rpt = uae_gethrtime ();
 	v   = rpt - vsyncmintime;
 	if (v > syncbase || v < -(syncbase))

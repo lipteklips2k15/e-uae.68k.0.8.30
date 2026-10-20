@@ -22,6 +22,9 @@
 #include "inputdevice.h"
 #include "hostdisk.h"
 
+extern void memory_direct_refresh (void);       /* memory.c */
+extern void custom_set_timecheck (int n);       /* custom.c */
+
 #include <intuition/intuition.h>
 #include <libraries/asl.h>
 #include <libraries/gadtools.h>
@@ -438,13 +441,13 @@ void gui_fps (int fps, int idle)
  * only sets a flag; gui_handle_events() opens or closes the window.
  */
 
-#define GUI_W   536             /* inner size */
+#define GUI_W   600             /* inner size */
 #define GUI_H   166
 #define GH      14              /* gadget height, topaz 8 */
 #define ROW     19
 
-enum { PAGE_DRIVES, PAGE_STATE, PAGE_EMULATOR, PAGE_SETTINGS, PAGE_MEMORY, PAGE_MOUNTS, PAGE_INPUT, PAGE_COUNT };
-static const char *page_names[PAGE_COUNT] = { "Drives", "State", "Emulator", "Settings", "Memory", "HD/Share", "Input" };
+enum { PAGE_DRIVES, PAGE_STATE, PAGE_EMULATOR, PAGE_CPU, PAGE_SETTINGS, PAGE_MEMORY, PAGE_MOUNTS, PAGE_INPUT, PAGE_COUNT };
+static const char *page_names[PAGE_COUNT] = { "Drives", "State", "Emulator", "CPU", "Settings", "Memory", "HD/Share", "Input" };
 
 enum {
     GID_PAGE = 1,                               /* + page */
@@ -452,6 +455,7 @@ enum {
     GID_DF_EJECT = 20,                          /* + drive */
     GID_DF_REAL = 110,                          /* + drive: the host's real one */
     GID_AKIKO = 115,
+    GID_SPEEDMODE = 120, GID_SPEEDFIXED, GID_IDLE, GID_DIRECTRAM, GID_TIMECHECK, GID_CYCLEEXACT,
     GID_LOADSTATE = 30, GID_SAVESTATE, GID_SOFTRESET, GID_HARDRESET,
     GID_STATELIST, GID_STATELOAD,
     GID_SOUND = 40, GID_VOLUME, GID_FRAMERATE, GID_LEDS,
@@ -517,8 +521,20 @@ static struct TextAttr gui_font = { (STRPTR) "topaz.font", 8, 0, 0 };
 static char            gui_title[96];
 
 static const char *sound_labels[] = { "Off", "Normal", "Best", 0 };
-static const char *cpu_labels[] = { "68000", "68010", "68020", "68020/68881", "68040", "68060", 0 };
-static const int   cpu_levels[] = { 0, 1, 2, 3, 4, 6 };
+static const char *cpu_labels[] = { "68000", "68010", "68020", "68020/68881", "68030/68882",
+                                     "68040", "68060", 0 };
+static const int   cpu_levels[] = { 0, 1, 2, 3, 3, 4, 6 };     /* 4: level 3 + cpu_030 */
+#define CPU_CHOICES 7
+#define CPU_030_CHOICE 4
+
+/* CPU page: prefs m68k_speed (-1 max, 0 real, 1-20 fixed), cpu_idle,
+   cpu_timecheck */
+static const char *speed_labels[] = { "Fastest (max)", "Real Amiga", "Fixed", 0 };
+static const char *idle_labels[] = { "Keep running", "Sleep a little", "Sleep more", 0 };
+static const int   idle_values[] = { 0, 8, 2 };
+static const char *timecheck_labels[] = { "256 instr.", "1024 instr.", "4096 instr.", 0 };
+static const int   timecheck_values[] = { 256, 1024, 4096 };
+static int speed_fixed = 4;             /* the slider's last value */
 
 /* The saved-state list: S:uae-states.csv, one "label,path" per line,
  * appended by every save from the GUI; shown newest first. */
@@ -707,8 +723,10 @@ static __attribute__((noinline)) struct Gadget *mk (struct Gadget *prev, ULONG k
 static int cpu_index (void)
 {
     int i;
-    for (i = 5; i > 0; i--)
-        if (changed_prefs.cpu_level >= cpu_levels[i])
+    if (changed_prefs.cpu_030 && changed_prefs.cpu_level == 3)
+        return CPU_030_CHOICE;
+    for (i = CPU_CHOICES - 1; i > 0; i--)
+        if (i != CPU_030_CHOICE && changed_prefs.cpu_level >= cpu_levels[i])
             return i;
     return 0;
 }
@@ -845,7 +863,7 @@ static struct Gadget *build_page (struct Gadget *g)
     mount_dev = mount_vol = mount_pri = mount_remove = 0;
 
     for (i = 0; i < PAGE_COUNT; i++)
-        g = mk (g, BUTTON_KIND, GID_PAGE + i, page_names[i], 4 + i * 76, 2, 73, GH, 0,
+        g = mk (g, BUTTON_KIND, GID_PAGE + i, page_names[i], 4 + i * 74, 2, 71, GH, 0,
                 GA_Disabled, i == gui_page, TAG_DONE);
 
     switch (gui_page) {
@@ -902,13 +920,45 @@ static struct Gadget *build_page (struct Gadget *g)
         break;
     }
 
-    case PAGE_SETTINGS:
-        g = mk (g, CYCLE_KIND, GID_CPU, "CPU", 100, y, 140, GH, PLACETEXT_LEFT,
+    case PAGE_CPU: {
+        int mode = changed_prefs.m68k_speed < 0 ? 0 : changed_prefs.m68k_speed == 0 ? 1 : 2;
+        int idle = changed_prefs.cpu_idle == 0 ? 0 : changed_prefs.cpu_idle >= 5 ? 1 : 2;
+        int tc = changed_prefs.cpu_timecheck <= 256 ? 0 : changed_prefs.cpu_timecheck >= 4096 ? 2 : 1;
+
+        if (changed_prefs.m68k_speed > 0)
+            speed_fixed = changed_prefs.m68k_speed;
+        g = mk (g, CYCLE_KIND, GID_CPU, "CPU", 130, y, 150, GH, PLACETEXT_LEFT,
                 GTCY_Labels, cpu_labels, GTCY_Active, cpu_index (), TAG_DONE);
-        y += ROW;
-        g = mk (g, CHECKBOX_KIND, GID_COMPAT, "Compatible", 100, y, 26, 11, PLACETEXT_LEFT,
+        g = mk (g, CHECKBOX_KIND, GID_COMPAT, "Compatible", 400, y + 1, 26, 11, PLACETEXT_LEFT,
                 GTCB_Checked, changed_prefs.cpu_compatible, TAG_DONE);
-        g = mk (g, CHECKBOX_KIND, GID_AKIKO, "Akiko C2P", 330, y, 26, 11, PLACETEXT_LEFT,
+        g = mk (g, CHECKBOX_KIND, GID_CYCLEEXACT, "Cycle-exact", 560, y + 1, 26, 11, PLACETEXT_LEFT,
+                GTCB_Checked, changed_prefs.cpu_cycle_exact, TAG_DONE);
+        y += ROW + 4;
+        g = mk (g, CYCLE_KIND, GID_SPEEDMODE, "Speed", 130, y, 150, GH, PLACETEXT_LEFT,
+                GTCY_Labels, speed_labels, GTCY_Active, mode, TAG_DONE);
+        g = mk (g, SLIDER_KIND, GID_SPEEDFIXED, "Fixed", 340, y + 1, 180, GH - 2, PLACETEXT_LEFT,
+                GTSL_Min, 1, GTSL_Max, 20, GTSL_Level, speed_fixed, GA_Disabled, mode != 2,
+                GTSL_LevelFormat, "%2ld", GTSL_MaxLevelLen, 2, GTSL_LevelPlace, PLACETEXT_RIGHT,
+                GA_RelVerify, TRUE, TAG_DONE);
+        y += ROW;
+        g = mk (g, CYCLE_KIND, GID_IDLE, "When idle", 130, y, 150, GH, PLACETEXT_LEFT,
+                GTCY_Labels, idle_labels, GTCY_Active, idle, TAG_DONE);
+        y += ROW + 4;
+        g = mk (g, CHECKBOX_KIND, GID_DIRECTRAM, "Direct RAM", 130, y + 1, 26, 11, PLACETEXT_LEFT,
+                GTCB_Checked, changed_prefs.direct_ram, TAG_DONE);
+        g = mk (g, CYCLE_KIND, GID_TIMECHECK, "Clock check every", 400, y, 150, GH, PLACETEXT_LEFT,
+                GTCY_Labels, timecheck_labels, GTCY_Active, tc, TAG_DONE);
+        y += ROW + 2;
+        g = mk (g, TEXT_KIND, 0, 0, 4, y, 592, GH, 0,
+                GTTX_Text, "Fastest: all spare host time. Fixed: lower = faster CPU. Applies at once.", TAG_DONE);
+        y += ROW - 4;
+        g = mk (g, TEXT_KIND, 0, 0, 4, y, 592, GH, 0,
+                GTTX_Text, "Cycle-exact: slow, for timing-critical demos. Clock check: tuning for max.", TAG_DONE);
+        break;
+    }
+
+    case PAGE_SETTINGS:
+        g = mk (g, CHECKBOX_KIND, GID_AKIKO, "Akiko C2P", 100, y + 1, 26, 11, PLACETEXT_LEFT,
                 GTCB_Checked, changed_prefs.akiko_c2p, TAG_DONE);
         y += ROW;
         g = rom_text = mk (g, TEXT_KIND, 0, "Kickstart", 100, y, 280, GH, PLACETEXT_LEFT,
@@ -920,7 +970,7 @@ static struct Gadget *build_page (struct Gadget *g)
         g = mk (g, BUTTON_KIND, GID_SAVECFG, "Save config...", 160, y, 148, GH, 0, TAG_DONE);
         y += ROW + 4;
         g = mk (g, TEXT_KIND, 0, 0, 4, y, 460, GH, 0,
-                GTTX_Text, "CPU now; Akiko at a reset; ROM, configs at a hard reset", TAG_DONE);
+                GTTX_Text, "Akiko at a reset; ROM and loaded configs at a hard reset", TAG_DONE);
         break;
 
     case PAGE_MEMORY: {
@@ -1315,9 +1365,12 @@ static void gui_gadget (int id, int code)
         gui_pending_toggle = 1;
         break;
 
-    case GID_CPU:
-        changed_prefs.cpu_level = cpu_levels[code < 0 ? 0 : code > 5 ? 5 : code];
+    case GID_CPU: {
+        int c = code < 0 ? 0 : code >= CPU_CHOICES ? CPU_CHOICES - 1 : code;
+        changed_prefs.cpu_level = cpu_levels[c];
+        changed_prefs.cpu_030 = c == CPU_030_CHOICE;
         break;
+    }
     case GID_AKIKO:
         changed_prefs.akiko_c2p = !changed_prefs.akiko_c2p;
         gui_status (changed_prefs.akiko_c2p ? "Akiko C2P on at the next reset"
@@ -1325,6 +1378,31 @@ static void gui_gadget (int id, int code)
         break;
     case GID_COMPAT:
         changed_prefs.cpu_compatible = !changed_prefs.cpu_compatible;
+        break;
+
+    /* CPU page: changed_prefs, picked up by check_prefs_changed_cpu() */
+    case GID_CYCLEEXACT:
+        changed_prefs.cpu_cycle_exact = !changed_prefs.cpu_cycle_exact;
+        gui_status (changed_prefs.cpu_cycle_exact ? "cycle-exact CPU (slow)" : "cycle-exact off");
+        break;
+    case GID_SPEEDMODE:
+        changed_prefs.m68k_speed = code == 0 ? -1 : code == 1 ? 0 : speed_fixed;
+        show_page (PAGE_CPU);           /* the slider on or off */
+        break;
+    case GID_SPEEDFIXED:
+        speed_fixed = code < 1 ? 1 : code > 20 ? 20 : code;
+        changed_prefs.m68k_speed = speed_fixed;
+        break;
+    case GID_IDLE:
+        changed_prefs.cpu_idle = idle_values[code < 0 ? 0 : code > 2 ? 2 : code];
+        break;
+    case GID_DIRECTRAM:
+        currprefs.direct_ram = changed_prefs.direct_ram = !changed_prefs.direct_ram;
+        memory_direct_refresh ();
+        gui_status (currprefs.direct_ram ? "direct RAM access on" : "direct RAM access off");
+        break;
+    case GID_TIMECHECK:
+        custom_set_timecheck (timecheck_values[code < 0 ? 0 : code > 2 ? 2 : code]);
         break;
     case GID_ROM:
         if (gui_asl ("Kickstart ROM image", "#?", 0, 0, path, sizeof path)) {
