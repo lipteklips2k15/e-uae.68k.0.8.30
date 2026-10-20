@@ -55,6 +55,9 @@
 #include "libdisk.h"
 #include "supercard_pro.h"
 #include "crc32.h"
+#ifdef TARGET_AMIGAOS
+#include "hostdisk.h"       /* rawdf: the host's real drives read raw */
+#endif
 
 #include <ctype.h>
 
@@ -146,7 +149,8 @@ typedef struct {
 #define DRIVE_ID_35HD  0xAAAAAAAA
 #define DRIVE_ID_525SD 0x55555555 /* 40 track 5.25 drive , kickstart does not recognize this */
 
-typedef enum { ADF_NORMAL, ADF_EXT1, ADF_EXT2, ADF_FDI, ADF_IPF, ADF_CATWEASEL, ADF_PCDOS, ADF_LIBDISK, ADF_SUPERCARD_PRO } drive_filetype;
+typedef enum { ADF_NORMAL, ADF_EXT1, ADF_EXT2, ADF_FDI, ADF_IPF, ADF_CATWEASEL, ADF_PCDOS, ADF_LIBDISK, ADF_SUPERCARD_PRO,
+	       ADF_HOSTRAW /* the host's real drive, raw tracks (rawdf) */ } drive_filetype;
 typedef struct {
     struct zfile *diskfile;
     struct zfile *writediskfile;
@@ -863,6 +867,7 @@ static int drive_insert (drive * drv, struct uae_prefs *p, int dnum, const char 
     unsigned char buffer[2 + 2 + 4 + 4];
     trackid *tid;
     int size;
+    int hostraw = 0;
 
     drive_image_free (drv);
     drv->diskfile = DISK_validate_filename (fname, 1, &drv->wrprot, &drv->crc32);
@@ -891,7 +896,11 @@ static int drive_insert (drive * drv, struct uae_prefs *p, int dnum, const char 
 
     memset (buffer, 0, sizeof (buffer));
     size = 0;
-    if (drv->diskfile) {
+#ifdef TARGET_AMIGAOS
+    /* the host's real drive read raw: no image to look into */
+    hostraw = drv->diskfile && hostdisk_israw (fname) && zfile_hostdisk (drv->diskfile);
+#endif
+    if (drv->diskfile && !hostraw) {
 	zfile_fread (buffer, sizeof (char), 8, drv->diskfile);
 	zfile_fseek (drv->diskfile, 0, SEEK_END);
 	size = zfile_ftell (drv->diskfile);
@@ -899,7 +908,22 @@ static int drive_insert (drive * drv, struct uae_prefs *p, int dnum, const char 
     }
 
 
-    if (drv->catweasel) {
+    if (hostraw) {
+
+	/* disk.c gets its tracks as MFM from hostdisk_rawtrack */
+	unsigned int i;
+	drv->wrprot = 1;
+	drv->filetype = ADF_HOSTRAW;
+	drv->num_tracks = 160;
+	drv->num_secs = 11;
+	for (i = 0; i < drv->num_tracks; i++) {
+	    tid = &drv->trackdata[i];
+	    tid->type = TRACK_RAW;
+	    tid->len = tid->bitlen = 0;
+	    tid->offs = 0;
+	}
+
+    } else if (drv->catweasel) {
 
 	drv->wrprot = 1;
 	drv->filetype = ADF_CATWEASEL;
@@ -1032,7 +1056,8 @@ static int drive_insert (drive * drv, struct uae_prefs *p, int dnum, const char 
 	}
     }
 
-    openwritefile (drv, 0);
+    if (!hostraw)
+	openwritefile (drv, 0);
 
     drive_settype_id (drv); /* Set DD or HD drive */
     drive_fill_bigbuf (drv, 1);
@@ -1422,6 +1447,12 @@ static void drive_fill_bigbuf (drive * drv, int force)
     drv->tracktiming[0] = 0;
     drv->skipoffset = -1;
 
+#ifdef TARGET_AMIGAOS
+    if (drv->filetype == ADF_HOSTRAW) {
+	drv->tracklen = hostdisk_rawtrack (zfile_hostdisk (drv->diskfile), tr, drv->bigmfmbuf,
+					   sizeof drv->bigmfmbuf / sizeof drv->bigmfmbuf[0]);
+    } else
+#endif
     if (drv->writediskfile && drv->writetrackdata[tr].bitlen > 0) {
 	unsigned int i;
 	trackid *wti = &drv->writetrackdata[tr];
@@ -1819,6 +1850,7 @@ static void drive_write_data (drive * drv)
     case ADF_IPF:
     case ADF_LIBDISK:
     case ADF_SUPERCARD_PRO:
+    case ADF_HOSTRAW:
 	break;
     case ADF_PCDOS:
 	ret = drive_write_pcdos (drv);

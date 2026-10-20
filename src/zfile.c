@@ -577,6 +577,14 @@ static struct zfile *zfile_opensinglefile (struct zfile *l)
 /*
  * fopen() for a compressed file
  */
+#ifdef TARGET_AMIGAOS
+/* a real drive's (realdf/rawdf), else 0 */
+struct hostdisk *zfile_hostdisk (struct zfile *f)
+{
+    return f ? f->hd : 0;
+}
+#endif
+
 struct zfile *zfile_fopen (const char *name, const char *mode)
 {
     struct zfile *l;
@@ -588,7 +596,8 @@ struct zfile *zfile_fopen (const char *name, const char *mode)
 #ifdef TARGET_AMIGAOS
     if (hostdisk_unit (name) >= 0) {
 	struct hostdisk *hd = hostdisk_open (hostdisk_unit (name),
-					     strchr (mode, '+') || strchr (mode, 'w'));
+					     strchr (mode, '+') || strchr (mode, 'w'),
+					     hostdisk_israw (name));
 	if (!hd)
 	    return NULL;
 	l = zfile_create ();

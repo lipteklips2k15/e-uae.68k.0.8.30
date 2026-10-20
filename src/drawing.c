@@ -42,6 +42,7 @@
 #include "gui.h"
 #include "picasso96.h"
 #include "drawing.h"
+#include "hrtimer.h"
 #ifdef JIT
 # include "compemu.h"
 #endif
@@ -1964,14 +1965,41 @@ void redraw_frame (void)
     flush_screen (0, 0);
 }
 
+/* EUAE_PERF: the host time spent drawing the frames' lines and getting
+ * them to the screen, as a share of real time - gui_fps logs it */
+static int draw_perf = -1;
+static frame_time_t draw_time, draw_since;
+
+int drawing_permille (void)
+{
+    frame_time_t now, all;
+    int r = 0;
+
+    if (draw_perf < 0)
+	draw_perf = getenv ("EUAE_PERF") != 0;
+    if (!draw_perf)
+	return -1;
+    now = uae_gethrtime ();
+    all = now - draw_since;
+    if (draw_since && all > 0)
+	r = (int) ((uae_s64) draw_time * 1000 / all);
+    draw_since = now;
+    draw_time = 0;
+    return r;
+}
+
 void vsync_handle_redraw (int long_frame, int lof_changed)
 {
     last_redraw_point++;
     if (lof_changed || ! interlace_seen || last_redraw_point >= 2 || long_frame) {
 	last_redraw_point = 0;
 
-	if (framecnt == 0)
+	if (framecnt == 0) {
+	    frame_time_t t0 = draw_perf > 0 ? uae_gethrtime () : 0;
 	    finish_drawing_frame ();
+	    if (draw_perf > 0)
+		draw_time += uae_gethrtime () - t0;
+	}
 
 	interlace_seen = 0;
 

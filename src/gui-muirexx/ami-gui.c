@@ -425,6 +425,8 @@ void gui_cd_led (int led)
 void gui_fps (int fps, int idle)
 {
     extern int cpu_cost_scale;          /* custom.c */
+    extern int gfx_flush_permille (void);   /* ami-win.c: picture to the screen */
+    extern int drawing_permille (void);     /* drawing.c: lines drawn + flushed */
     static int perf = -1, n;
 
     gui_data.fps  = fps;
@@ -433,9 +435,14 @@ void gui_fps (int fps, int idle)
        frames) and idle into the log, every ~5 seconds of frames */
     if (perf < 0)
 	perf = getenv ("EUAE_PERF") != 0;
-    if (perf && ++n % 8 == 0)
-	write_log ("PERF: %d.%d fps, idle %d.%d%%, cpu cost %d/4096\n", fps / 10, fps % 10,
-		   idle / 10, idle % 10, cpu_cost_scale);
+    if (perf && ++n % 8 == 0) {
+	/* shares of real time: drawing the lines + display, and display alone
+	   (the flushes to the screen) */
+	int dr = drawing_permille (), fl = gfx_flush_permille ();
+	write_log ("PERF: %d.%d fps, idle %d.%d%%, cpu cost %d/4096, draw %d.%d%%, display %d.%d%%\n",
+		   fps / 10, fps % 10, idle / 10, idle % 10, cpu_cost_scale,
+		   dr / 10, dr % 10, fl / 10, fl % 10);
+    }
 }
 
 /****************************************************************************/
@@ -541,8 +548,16 @@ static const int   cpu_levels[] = { 0, 1, 2, 3, 3, 4, 6 };     /* 4: level 3 + c
 /* CPU page: prefs m68k_speed (-1 max, 0 real, 1-20 fixed), cpu_idle,
    cpu_timecheck */
 static const char *speed_labels[] = { "Fastest (max)", "Real Amiga", "Fixed", 0 };
-/* the Drives page: which of the host's real drives an emulated one uses */
-static const char *real_labels[] = { "Real...", "Real DF0:", "Real DF1:", "Real DF2:", "Real DF3:", 0 };
+/* the Drives page: which of the host's real drives an emulated one uses,
+   as AmigaDOS (realdf) or raw tracks for protected disks (rawdf) */
+static const char *real_labels[] = { "Real...", "Real DF0:", "Real DF1:", "Real DF2:", "Real DF3:",
+                                     "Raw DF0:", "Raw DF1:", "Raw DF2:", "Raw DF3:", 0 };
+
+static int real_index (const char *path)
+{
+    int u = hostdisk_unit (path);
+    return u < 0 ? 0 : 1 + u + (hostdisk_israw (path) ? 4 : 0);
+}
 static const char *idle_labels[] = { "Keep running", "Sleep a little", "Sleep more", 0 };
 static const int   idle_values[] = { 0, 8, 2 };
 static const char *timecheck_labels[] = { "256 instr.", "1024 instr.", "4096 instr.", 0 };
@@ -592,7 +607,7 @@ static const char *disk_name (const char *path)
     if (!path || !path[0])
         return "(empty)";
     if (u >= 0) {
-        sprintf (real, "Real floppy DF%d:", u);
+        sprintf (real, "%s floppy DF%d:", hostdisk_israw (path) ? "Raw" : "Real", u);
         return real;
     }
     return file_part (path);
@@ -906,7 +921,7 @@ static struct Gadget *build_page (struct Gadget *g)
             g = mk (g, BUTTON_KIND, GID_DF_EJECT + i, "Eject", 394, y, 68, GH, 0,
                     GA_Disabled, !currprefs.df[i][0], TAG_DONE);
             g = mk (g, CYCLE_KIND, GID_DF_REAL + i, 0, 466, y, 100, GH, 0,
-                    GTCY_Labels, real_labels, GTCY_Active, hostdisk_unit (currprefs.df[i]) + 1, TAG_DONE);
+                    GTCY_Labels, real_labels, GTCY_Active, real_index (currprefs.df[i]), TAG_DONE);
         }
         y += 6;
         g = mk (g, CYCLE_KIND, GID_FLOPPYSPEED, "Speed", 60, y, 140, GH, PLACETEXT_LEFT,
@@ -1315,8 +1330,10 @@ static void gui_gadget (int id, int code)
     }
     if (id >= GID_DF_REAL && id < GID_DF_REAL + 4) {
         /* any emulated drive on any of the host's drives (realdf<u>) */
-        int n = id - GID_DF_REAL, u = (int) code - 1, k;
+        int n = id - GID_DF_REAL, u = (int) code - 1, raw = u >= 4, k;
         char name[8], msg[48];
+        if (raw)
+            u -= 4;
         if (u < 0) {                    /* "Real...": off the real drive */
             if (hostdisk_unit (currprefs.df[n]) >= 0) {
                 disk_eject (n);
@@ -1338,13 +1355,13 @@ static void gui_gadget (int id, int code)
             show_page (PAGE_DRIVES);
             return;
         }
-        sprintf (name, "realdf%d", u);
+        sprintf (name, raw ? "rawdf%d" : "realdf%d", u);
         if (currprefs.df[n][0])
             disk_eject (n);
         strcpy (changed_prefs.df[n], name);
         disk_insert (n, name);
         show_page (PAGE_DRIVES);
-        sprintf (msg, "real DF%d: in DF%d: - the host's DOS keeps out", u, n);
+        sprintf (msg, raw ? "real DF%d: in DF%d: raw, read-only" : "real DF%d: in DF%d: - the host's DOS keeps out", u, n);
         gui_status (msg);
         return;
     }

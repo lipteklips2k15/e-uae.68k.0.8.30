@@ -126,6 +126,7 @@
 
 #include "uae.h"
 #include "options.h"
+#include "hrtimer.h"
 #include "custom.h"
 #include "xwin.h"
 #include "drawing.h"
@@ -942,6 +943,32 @@ extern UBYTE cidx[4][8*4096];
 /*
  * Dummy buffer locking methods
  */
+/* EUAE_PERF: the host time spent getting the picture to the screen (the
+ * flush functions), as a share of real time - gui_fps logs it */
+static int flush_perf = -1;
+static frame_time_t flush_time, flush_since;
+
+#define FLUSH_PERF_START  frame_time_t flush_t0 = flush_perf > 0 ? uae_gethrtime () : 0
+#define FLUSH_PERF_END    do { if (flush_perf > 0) flush_time += uae_gethrtime () - flush_t0; } while (0)
+
+int gfx_flush_permille (void)
+{
+    frame_time_t now, all;
+    int r = 0;
+
+    if (flush_perf < 0)
+        flush_perf = getenv ("EUAE_PERF") != 0;
+    if (!flush_perf)
+        return -1;
+    now = uae_gethrtime ();
+    all = now - flush_since;
+    if (flush_since && all > 0)
+        r = (int) ((uae_s64) flush_time * 1000 / all);
+    flush_since = now;
+    flush_time = 0;
+    return r;
+}
+
 static int dummy_lock (struct vidbuf_description *gfxinfo)
 {
     return 1;
@@ -1093,6 +1120,7 @@ static void flush_line_cgx (struct vidbuf_description *gfxinfo, int line_no)
 
 static void flush_block_cgx (struct vidbuf_description *gfxinfo, int first_line, int last_line)
 {
+    FLUSH_PERF_START;
     BltBitMapRastPort (CybBitMap,
 		       0, first_line,
 		       RP,
@@ -1101,6 +1129,7 @@ static void flush_block_cgx (struct vidbuf_description *gfxinfo, int first_line,
 		       gfxinfo->width,
 		       last_line - first_line + 1,
 		       0xc0);
+    FLUSH_PERF_END;
 }
 # else
 static void flush_line_cgx_v41 (struct vidbuf_description *gfxinfo, int line_no)
@@ -1152,6 +1181,7 @@ static void flush_block_cgx_scaled (struct vidbuf_description *gfxinfo, int firs
     uae_u8 *src_base;
     uae_u8 *src_row;
     uae_u8 *dst_row;
+    uae_u8 *dst_base;
 
     src_w    = gfxinfo->width;
     src_h    = gfxinfo->height;
@@ -1162,7 +1192,15 @@ static void flush_block_cgx_scaled (struct vidbuf_description *gfxinfo, int firs
     src_rb   = gfxinfo->rowbytes;
     src_base = (uae_u8 *)gfxinfo->bufmem;
 
-    if (!ScaleBuffer || !src_base || !RP) return;
+    /* pre-v41: scaled straight into the RTG bitmap that is blitted to the
+       window (it is only written, never read) - no buffer between and no
+       copy of it, one pass over the picture less per frame */
+# ifdef USE_CYBERGFX_V41
+    dst_base = ScaleBuffer;
+# else
+    dst_base = ScaleBitMap ? (uae_u8 *) GetCyberMapAttr (ScaleBitMap, CYBRMATTR_DISPADR) : 0;
+# endif
+    if (!dst_base || !src_base || !RP) return;
 
     /* Fixed-point 16.16 step — eliminates per-pixel integer division.
      * 68881 FPU used to compute steps when available (-m68881 build). */
@@ -1207,6 +1245,8 @@ static void flush_block_cgx_scaled (struct vidbuf_description *gfxinfo, int firs
         dst_last++;
     if (dst_first > dst_last)   /* scaling down: no destination line for it */
         return;
+    {
+    FLUSH_PERF_START;
 
     for (dy = dst_first, y_accum = (unsigned long)dst_first * y_step;
          dy <= dst_last;
@@ -1215,7 +1255,7 @@ static void flush_block_cgx_scaled (struct vidbuf_description *gfxinfo, int firs
         if (sy >= src_h)
             sy = src_h - 1;
         src_row = src_base    + sy * src_rb;
-        dst_row = ScaleBuffer + dy * dst_rb;
+        dst_row = dst_base + dy * dst_rb;
 
         if (pixbytes == 4) {
             uae_u32 *src32 = (uae_u32 *)src_row;
@@ -1238,15 +1278,12 @@ static void flush_block_cgx_scaled (struct vidbuf_description *gfxinfo, int firs
                      XOffset, YOffset + dst_first,
                      dst_w, dst_last - dst_first + 1, RECTFMT_RAW);
 # else
-    if (ScaleBitMap) {
-        uae_u8 *bm_dst = (uae_u8 *) GetCyberMapAttr (ScaleBitMap, CYBRMATTR_DISPADR);
-        for (row = dst_first; row <= dst_last; row++)
-            CopyMem (ScaleBuffer + row * dst_rb, bm_dst + row * dst_rb, dst_rb);
-        BltBitMapRastPort (ScaleBitMap, 0, dst_first, RP,
-                           XOffset, YOffset + dst_first,
-                           dst_w, dst_last - dst_first + 1, 0xc0);
-    }
+    BltBitMapRastPort (ScaleBitMap, 0, dst_first, RP,
+                       XOffset, YOffset + dst_first,
+                       dst_w, dst_last - dst_first + 1, 0xc0);
 # endif
+    FLUSH_PERF_END;
+    }
 #undef SRC_OF
     } /* end dirty band */
 }
@@ -3418,7 +3455,7 @@ static void p96_convert (int first, int last)
 }
 
 /* each frame: the changed lines to the window */
-static void p96_flush (void)
+static void p96_flush_1 (void)
 {
     int x0, y0, w, h, first, last;
 
@@ -3447,6 +3484,13 @@ static void p96_flush (void)
     p96_convert (first, last);
     WritePixelArray (p96buf, 0, first, p96buf_w * 4, RP,
                      x0, y0 + first, w, last - first + 1, RECTFMT_ARGB);
+}
+
+static void p96_flush (void)
+{
+    FLUSH_PERF_START;
+    p96_flush_1 ();
+    FLUSH_PERF_END;
 }
 
 int DX_BitsPerCannon (void)
@@ -4166,20 +4210,11 @@ static int open_display (void)
                 scale_x = gfxvidinfo.width;
                 scale_y = gfxvidinfo.height;
             } else {
-                /* ScaleBuffer matches ScaleBitMap stride exactly */
+                /* scaled straight into ScaleBitMap: its stride */
                 ScaleBufRowbytes = (int) GetCyberMapAttr (ScaleBitMap, CYBRMATTR_XMOD);
-                ScaleBuffer = AllocVec (ScaleBufRowbytes * scale_y, MEMF_ANY);
-                if (!ScaleBuffer) {
-                    write_log ("open_display: ScaleBuffer alloc failed, disabling scaling\n");
-                    FreeVec (CpuBuffer);       CpuBuffer   = NULL; CpuBufRowbytes = 0;
-                    myFreeBitMap (ScaleBitMap); ScaleBitMap = NULL;
-                    scale_x = gfxvidinfo.width;
-                    scale_y = gfxvidinfo.height;
-                } else {
-                    write_log ("open_display: scaling %dx%d->%dx%d CpuBuf stride=%d ScaleBuf stride=%d\n",
-                               gfxvidinfo.width, gfxvidinfo.height,
-                               scale_x, scale_y, CpuBufRowbytes, ScaleBufRowbytes);
-                }
+                write_log ("open_display: scaling %dx%d->%dx%d CpuBuf stride=%d ScaleBitMap stride=%d\n",
+                           gfxvidinfo.width, gfxvidinfo.height,
+                           scale_x, scale_y, CpuBufRowbytes, ScaleBufRowbytes);
             }
         }
 # else
