@@ -16,6 +16,7 @@
 #include "memory.h"
 #include "custom.h"
 #include "newcpu.h"
+#include "mmu030.h"
 #include "cpu_prefetch.h"
 #include "autoconf.h"
 #include "traps.h"
@@ -1432,6 +1433,7 @@ void m68k_reset (void)
     SET_NFLG (&regs.ccrflags, 0);
     regs.intmask = 7;
     regs.vbr = regs.sfc = regs.dfc = 0;
+    tc = 0;                     /* a reset switches the 68030's MMU off */
 #ifdef FPUEMU
     regs.fpcr = regs.fpsr = regs.fpiar = 0;
     regs.fp_result=1;
@@ -1543,11 +1545,10 @@ void mmu_op(uae_u32 opcode, struct regstruct *regs, uae_u16 extra)
 
 /*
  * The 68030's MMU instructions (opcodes $F000-$F03F + extension word), for
- * prefs cpu_030. No address translation: the registers are kept and read
- * back - what OS 3.x/SetPatch do on a 68030 (switch the MMU off, set the
- * transparent translation) then works. PFLUSH/PLOAD do nothing, PTEST
- * finds nothing. Programs that really map memory with the MMU (Enforcer,
- * MuForce, VMM) get no mapping.
+ * prefs cpu_030. Address translation is mmu030.c's: whenever TC, CRP,
+ * SRP or TT0/TT1 change or the guest flushes (PFLUSH, PLOAD) it walks the
+ * tables again into the bank table; PTEST searches them. No bus errors,
+ * so ROM remappers (BlizKick, MuFastROM) work, Enforcer/MuForce/VMM don't.
  */
 static uae_u32 tt030[2], srp030[2], crp030[2];
 static uae_u16 mmusr030;
@@ -1624,26 +1625,26 @@ static unsigned long REGPARAM2 op_mmu030 (uae_u32 opcode, struct regstruct *regs
 	    r[0] = get_long (ea);
 	    if (longs == 2)
 		r[1] = get_long (ea + 4);
-	    if (r == &tc && (tc & 0x80000000)) {
-		static int told;
-		if (!told++)
-		    write_log ("68030: the guest switched the MMU on - no translation emulated\n");
-	    }
 	}
+	if (!store && !word)
+	    mmu030_update (tc, crp030, srp030, tt030);
 	return 4;
     }
     case 1:                             /* PFLUSH, PFLUSHA, PLOAD */
 	if (preg == 6 || preg == 0)         /* the forms with an <ea> */
 	    if (!ea030 (opcode, regs, 4, &ea))
 		break;
+	mmu030_update (tc, crp030, srp030, tt030);  /* descriptors may have changed */
 	return 4;
-    case 4:                             /* PTEST */
+    case 4: {                           /* PTEST */
+	uae_u32 desc;
 	if (!ea030 (opcode, regs, 4, &ea))
 	    break;
-	mmusr030 = 0;
+	mmusr030 = mmu030_ptest (tc, crp030, srp030, tt030, ea, &desc);
 	if (ext & 0x100)                    /* address register for the descriptor */
-	    m68k_areg (regs, (ext >> 5) & 7) = 0;
+	    m68k_areg (regs, (ext >> 5) & 7) = desc;
 	return 4;
+    }
     }
     /* not a 68030 MMU instruction after all: F-line exception as before */
     m68k_setpc (regs, oldpc);

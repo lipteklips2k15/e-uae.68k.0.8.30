@@ -33,7 +33,7 @@ CORE = main newcpu fpp memory events custom serial cia blitter autoconf \
        blitfunc blittable cpustbl cpudefs cpuemu_0 cpuemu_5 cpuemu_6 \
        writelog debug identify \
        filesys fsdb fsusage hardfile filesys_unix fsdb_unix \
-       scsi-none bsdsocket stubs_nodisk c99_complex_shim akiko_c2p
+       scsi-none bsdsocket stubs_nodisk c99_complex_shim akiko_c2p mmu030
 
 SUBDIR_SRCS = \
        md-68k/support.c \

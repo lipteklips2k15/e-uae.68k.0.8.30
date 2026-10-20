@@ -13,6 +13,7 @@
 #include "options.h"
 #include "uae.h"
 #include "memory.h"
+#include "mmu030.h"
 #include "ersatz.h"
 #include "zfile.h"
 #include "custom.h"
@@ -119,6 +120,12 @@ void memory_direct_set (unsigned int page, uae_u32 offset)
 {
     mem_direct_off[page] = offset;
     direct_page (page);
+}
+
+/* the page's offset in its bank's memory (mmu030.c puts a bank back) */
+uae_u32 memory_direct_offset (unsigned int page)
+{
+    return mem_direct_off[page];
 }
 
 void memory_direct_refresh (void)
@@ -1669,6 +1676,8 @@ void map_overlay (int chip)
 void memory_reset (void)
 {
     unsigned int bnk;
+
+    mmu030_forget ();           /* the 68030 MMU's banks go with the old map */
 
 #ifdef NATMEM_OFFSET
     delete_shmmaps (0, 0xFFFF0000);

@@ -134,6 +134,7 @@ extern uae_u8 *mem_rdirect[MEMORY_BANKS];
 extern uae_u8 *mem_wdirect[MEMORY_BANKS];
 extern void memory_direct_set (unsigned int bank, uae_u32 offset);
 extern void memory_direct_refresh (void);
+extern uae_u32 memory_direct_offset (unsigned int page);
 
 #ifdef JIT
 # define put_mem_bank(addr, b, realstart) do { \
