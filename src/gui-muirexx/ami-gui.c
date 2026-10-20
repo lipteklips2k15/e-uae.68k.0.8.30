@@ -424,8 +424,16 @@ void gui_cd_led (int led)
 
 void gui_fps (int fps, int idle)
 {
+    static int perf = -1, n;
+
     gui_data.fps  = fps;
     gui_data.idle = idle;
+    /* EUAE_PERF set: frames per second (custom.c gives tenths, every 32
+       frames) and idle into the log, every ~5 seconds of frames */
+    if (perf < 0)
+	perf = getenv ("EUAE_PERF") != 0;
+    if (perf && ++n % 8 == 0)
+	write_log ("PERF: %d.%d fps, idle %d.%d%%\n", fps / 10, fps % 10, idle / 10, idle % 10);
 }
 
 /****************************************************************************/
@@ -456,6 +464,7 @@ enum {
     GID_DF_REAL = 110,                          /* + drive: the host's real one */
     GID_AKIKO = 115,
     GID_SPEEDMODE = 120, GID_SPEEDFIXED, GID_IDLE, GID_DIRECTRAM, GID_TIMECHECK, GID_CYCLEEXACT,
+    GID_FLOPPYSPEED = 130, GID_IMMBLITS, GID_COLLISIONS,
     GID_LOADSTATE = 30, GID_SAVESTATE, GID_SOFTRESET, GID_HARDRESET,
     GID_STATELIST, GID_STATELOAD,
     GID_SOUND = 40, GID_VOLUME, GID_FRAMERATE, GID_LEDS,
@@ -535,6 +544,21 @@ static const int   idle_values[] = { 0, 8, 2 };
 static const char *timecheck_labels[] = { "256 instr.", "1024 instr.", "4096 instr.", 0 };
 static const int   timecheck_values[] = { 256, 1024, 4096 };
 static int speed_fixed = 4;             /* the slider's last value */
+
+/* chipset speed: prefs floppy_speed (100 normal, n x 100, 0 turbo: disk
+   DMA at once) and collision_level */
+static const char *floppyspeed_labels[] = { "Normal", "2x", "4x", "8x", "Turbo", 0 };
+static const int   floppyspeed_values[] = { 100, 200, 400, 800, 0 };
+static const char *collision_labels[] = { "None", "Sprites", "Playfields", "Full", 0 };
+
+static int floppyspeed_index (int v)
+{
+    int i;
+    for (i = 0; i < 5; i++)
+        if (floppyspeed_values[i] == v)
+            return i;
+    return v > 800 ? 3 : 0;
+}
 
 /* The saved-state list: S:uae-states.csv, one "label,path" per line,
  * appended by every save from the GUI; shown newest first. */
@@ -879,6 +903,12 @@ static struct Gadget *build_page (struct Gadget *g)
                     GA_Disabled, !currprefs.df[i][0], TAG_DONE);
             g = mk (g, BUTTON_KIND, GID_DF_REAL + i, "Real", 466, y, 66, GH, 0, TAG_DONE);
         }
+        y += 6;
+        g = mk (g, CYCLE_KIND, GID_FLOPPYSPEED, "Speed", 60, y, 140, GH, PLACETEXT_LEFT,
+                GTCY_Labels, floppyspeed_labels,
+                GTCY_Active, floppyspeed_index (changed_prefs.floppy_speed), TAG_DONE);
+        g = mk (g, TEXT_KIND, 0, 0, 210, y, 386, GH, 0,
+                GTTX_Text, "faster loading; Turbo may upset copy-protected disks", TAG_DONE);
         break;
 
     case PAGE_STATE:
@@ -917,6 +947,17 @@ static struct Gadget *build_page (struct Gadget *g)
         g = mk (g, BUTTON_KIND, GID_LORES, "Lores / size", 4, y, 148, GH, 0, TAG_DONE);
         g = mk (g, BUTTON_KIND, GID_FULLSCREEN, "Window / full", 160, y, 148, GH, 0, TAG_DONE);
         g = mk (g, BUTTON_KIND, GID_SCREENMODE, "Screen mode...", 316, y, 148, GH, 0, TAG_DONE);
+        y += ROW + 4;
+        /* chipset speed: both apply at once (check_prefs_changed_custom) */
+        g = mk (g, CHECKBOX_KIND, GID_IMMBLITS, "Immediate blits", 132, y + 1, 26, 11, PLACETEXT_LEFT,
+                GTCB_Checked, changed_prefs.immediate_blits, TAG_DONE);
+        g = mk (g, CYCLE_KIND, GID_COLLISIONS, "Collisions", 316, y, 148, GH, PLACETEXT_LEFT,
+                GTCY_Labels, collision_labels,
+                GTCY_Active, changed_prefs.collision_level < 0 ? 0 : changed_prefs.collision_level > 3
+                             ? 3 : changed_prefs.collision_level, TAG_DONE);
+        y += ROW - 2;
+        g = mk (g, TEXT_KIND, 0, 0, 4, y, 592, GH, 0,
+                GTTX_Text, "Immediate blits and fewer collision checks are faster; a few games need them", TAG_DONE);
         break;
     }
 
@@ -1400,6 +1441,16 @@ static void gui_gadget (int id, int code)
         currprefs.direct_ram = changed_prefs.direct_ram = !changed_prefs.direct_ram;
         memory_direct_refresh ();
         gui_status (currprefs.direct_ram ? "direct RAM access on" : "direct RAM access off");
+        break;
+    case GID_FLOPPYSPEED:
+        changed_prefs.floppy_speed = floppyspeed_values[code < 0 ? 0 : code > 4 ? 4 : code];
+        gui_status (changed_prefs.floppy_speed ? "floppy speed set" : "turbo floppy");
+        break;
+    case GID_IMMBLITS:
+        changed_prefs.immediate_blits = !changed_prefs.immediate_blits;
+        break;
+    case GID_COLLISIONS:
+        changed_prefs.collision_level = code < 0 ? 0 : code > 3 ? 3 : code;
         break;
     case GID_TIMECHECK:
         custom_set_timecheck (timecheck_values[code < 0 ? 0 : code > 2 ? 2 : code]);

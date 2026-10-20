@@ -12,7 +12,8 @@
 #                        (written as its screenmode.prefs) instead of running rtgtest
 param([int]$Seconds = 420, [ValidateSet('old', 'os32')][string]$Card = 'old', [switch]$Keep, [switch]$Setup,
       [switch]$Workbench, [uint32]$WbMode = 0x50041303, [int]$WbWidth = 800, [int]$WbHeight = 600, [int]$WbDepth = 24,
-      [switch]$NoDirect)       # E-UAE without direct RAM access (EUAE_NODIRECT), for speed comparisons
+      [switch]$NoDirect,       # E-UAE without direct RAM access (EUAE_NODIRECT), for speed comparisons
+      [switch]$Perf)           # frames per second into euae.log (EUAE_PERF)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $share = "$root\share"
@@ -65,6 +66,7 @@ $lines += "Copy DIZ:guest/rtgtest $g/C/rtgtest",
     'Echo e-uae-start >>DIZ:boot.txt',
     'SetEnv EUAE_LOG DIZ:euae.log',
     $(if ($NoDirect) { 'SetEnv EUAE_NODIRECT 1' } else { 'UnSetEnv EUAE_NODIRECT' }),
+    $(if ($Perf) { 'SetEnv EUAE_PERF 1' } else { 'UnSetEnv EUAE_PERF' }),
     'CD DIZ:', 'Stack 65536',
     'DIZ:uae -f DIZ:guest/euae.uaerc >DIZ:run.log',
     'Echo uae-exited >DIZ:done.txt'
