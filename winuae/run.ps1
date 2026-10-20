@@ -14,6 +14,7 @@ param([int]$Seconds = 420, [ValidateSet('old', 'os32')][string]$Card = 'old', [s
       [switch]$Workbench, [uint32]$WbMode = 0x50041303, [int]$WbWidth = 800, [int]$WbHeight = 600, [int]$WbDepth = 24,
       [switch]$NoDirect,       # E-UAE without direct RAM access (EUAE_NODIRECT), for speed comparisons
       [switch]$Perf,           # frames per second into euae.log (EUAE_PERF)
+      [switch]$RegLog,         # custom register writes of the last frames into share/regs.txt when the GUI opens (EUAE_REGLOG)
       [string]$GuestConfig = 'euae.uaerc')  # E-UAE's config in share/guest (ags.uaerc: boot the AGS image)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -23,7 +24,7 @@ $tree = Split-Path -Parent $root
 if (Get-Process winuae64 -ErrorAction SilentlyContinue) { 'WinUAE is running already - close it first'; return }
 Copy-Item "$tree\uae" "$share\uae" -Force
 if (-not (Test-Path "$share\guest\kick.rom")) { Copy-Item "U:\Amiga OS's\ROMs\A1200.47.111.rom" "$share\guest\kick.rom" }
-Remove-Item "$share\done.txt", "$share\run.log", "$share\euae.log", "$share\boot.txt", "$share\guest\sys\guest.log" -ErrorAction SilentlyContinue
+Remove-Item "$share\regs.txt*", "$share\done.txt", "$share\run.log", "$share\euae.log", "$share\boot.txt", "$share\guest\sys\guest.log" -ErrorAction SilentlyContinue
 
 $g = 'DIZ:guest/sys'
 $lines = @('Echo autorun-start >DIZ:boot.txt', 'FailAt 30', 'Wait 10',
@@ -68,6 +69,7 @@ $lines += "Copy DIZ:guest/rtgtest $g/C/rtgtest",
     'SetEnv EUAE_LOG DIZ:euae.log',
     $(if ($NoDirect) { 'SetEnv EUAE_NODIRECT 1' } else { 'UnSetEnv EUAE_NODIRECT' }),
     $(if ($Perf) { 'SetEnv EUAE_PERF 1' } else { 'UnSetEnv EUAE_PERF' }),
+    $(if ($RegLog) { 'SetEnv EUAE_REGLOG DIZ:regs.txt' } else { 'UnSetEnv EUAE_REGLOG' }),
     'CD DIZ:', 'Stack 65536',
     "DIZ:uae -f DIZ:guest/$GuestConfig >DIZ:run.log",
     'Echo uae-exited >DIZ:done.txt'

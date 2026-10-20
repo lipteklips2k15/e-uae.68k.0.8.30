@@ -46,6 +46,11 @@ extern void do_cycles_ce (long cycles);
 extern unsigned long currcycle;
 extern unsigned int is_lastline;
 extern int lastline_time_every;         /* custom.c, from prefs cpu_timecheck */
+#define CPU_COST_SHIFT 12
+#define CPU_COST_ONE (1 << CPU_COST_SHIFT)
+extern int cpu_cost_scale;              /* custom.c: max speed, an instruction's cost in CPU_COST_ONEths */
+extern int lastline_measure;
+extern void cpu_cost_adapt (frame_time_t spare);
 extern void custom_set_timecheck (int n);
 
 extern unsigned long nextevent;
@@ -101,6 +106,10 @@ STATIC_INLINE void do_cycles (unsigned int cycles_to_add)
 	time_skip = lastline_time_every;
 	rpt = uae_gethrtime ();
 	v   = rpt - vsyncmintime;
+	if (lastline_measure) {     /* the frame's first look: its spare time */
+	    lastline_measure = 0;
+	    cpu_cost_adapt (-v);
+	}
 	if (v > syncbase || v < -(syncbase))
 	    vsyncmintime = rpt;
 	if (v < 0) {

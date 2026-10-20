@@ -1181,18 +1181,40 @@ static void flush_block_cgx_scaled (struct vidbuf_description *gfxinfo, int firs
     /* Map dirty source line range to destination line range.
      * UAE passes only the changed band — no need to scale/blit the
      * entire frame every flush.  On PiStorm/Emu68 this is the key
-     * optimisation: fewer bytes crossing the Zorro bus per frame. */
+     * optimisation: fewer bytes crossing the Zorro bus per frame.
+     *
+     * The range must be exactly the destination lines whose source line
+     * (dy * y_step >> 16, as the loop below picks it) is in the band.
+     * first * dst_h / src_h was one line off at the edges: when scaling
+     * up it redrew a line above the band and missed the band's last
+     * destination lines, which kept old pixels - black streaks and
+     * stale lines in games that redraw parts of the screen. */
     {
     int dst_first, dst_last;
+#define SRC_OF(d) ((int) (((unsigned long) (d) * y_step) >> 16))
     dst_first = (first_line * dst_h) / src_h;
-    dst_last  = (last_line  * dst_h) / src_h;
-    if (dst_first < 0)       dst_first = 0;
-    if (dst_last  >= dst_h)  dst_last  = dst_h - 1;
+    if (dst_first >= dst_h) dst_first = dst_h - 1;
+    if (dst_first < 0)      dst_first = 0;
+    while (dst_first > 0 && SRC_OF (dst_first - 1) >= first_line)
+        dst_first--;
+    while (dst_first < dst_h && SRC_OF (dst_first) < first_line)
+        dst_first++;
+    dst_last = ((last_line + 1) * dst_h) / src_h;
+    if (dst_last >= dst_h)  dst_last = dst_h - 1;
+    while (dst_last > 0 && SRC_OF (dst_last) > last_line)
+        dst_last--;
+    while (dst_last + 1 < dst_h && SRC_OF (dst_last + 1) <= last_line)
+        dst_last++;
+    if (dst_first > dst_last)   /* scaling down: no destination line for it */
+        return;
 
     for (dy = dst_first, y_accum = (unsigned long)dst_first * y_step;
          dy <= dst_last;
          dy++, y_accum += y_step) {
-        src_row = src_base    + (y_accum >> 16) * src_rb;
+        int sy = (int) (y_accum >> 16);
+        if (sy >= src_h)
+            sy = src_h - 1;
+        src_row = src_base    + sy * src_rb;
         dst_row = ScaleBuffer + dy * dst_rb;
 
         if (pixbytes == 4) {
@@ -1225,6 +1247,7 @@ static void flush_block_cgx_scaled (struct vidbuf_description *gfxinfo, int firs
                            dst_w, dst_last - dst_first + 1, 0xc0);
     }
 # endif
+#undef SRC_OF
     } /* end dirty band */
 }
 

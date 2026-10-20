@@ -424,6 +424,7 @@ void gui_cd_led (int led)
 
 void gui_fps (int fps, int idle)
 {
+    extern int cpu_cost_scale;          /* custom.c */
     static int perf = -1, n;
 
     gui_data.fps  = fps;
@@ -433,7 +434,8 @@ void gui_fps (int fps, int idle)
     if (perf < 0)
 	perf = getenv ("EUAE_PERF") != 0;
     if (perf && ++n % 8 == 0)
-	write_log ("PERF: %d.%d fps, idle %d.%d%%\n", fps / 10, fps % 10, idle / 10, idle % 10);
+	write_log ("PERF: %d.%d fps, idle %d.%d%%, cpu cost %d/4096\n", fps / 10, fps % 10,
+		   idle / 10, idle % 10, cpu_cost_scale);
 }
 
 /****************************************************************************/
@@ -1264,6 +1266,10 @@ static void gui_open_window (void)
         ScreenToFront (gui_scr);
     show_page (gui_page);
     write_log ("GUI: open on %s screen\n", gui_own_scr ? "its own" : "the emulator's");
+    {
+	extern void regtrace_dump (void);   /* custom.c: EUAE_REGLOG */
+	regtrace_dump ();
+    }
 }
 
 void gui_toggle (void)

@@ -114,6 +114,50 @@ void custom_set_timecheck (int n)
 
 static int rpt_did_reset;
 
+/* cpu_speed=max: what an instruction costs in chipset time, in
+ * CPU_COST_ONEths of its real cost. Max used to run the CPU at its real
+ * speed for the whole frame and give it the host's spare time only on the
+ * last line. Instead each frame's spare time on the last line moves the
+ * cost: plenty left, the CPU gets cheaper (faster all through the frame,
+ * as a fast accelerator would be); little or none, dearer again, never
+ * above the real cost. */
+int cpu_cost_scale = CPU_COST_ONE;
+int lastline_measure;
+
+#define CPU_COST_MIN 2
+
+static void cpu_cost_set (int s)
+{
+    cpu_cost_scale = s < CPU_COST_MIN ? CPU_COST_MIN : s > CPU_COST_ONE ? CPU_COST_ONE : s;
+}
+
+void cpu_cost_adapt (frame_time_t spare)
+{
+    int s = cpu_cost_scale;
+
+    if (currprefs.m68k_speed != -1)
+	s = CPU_COST_ONE;
+    else if (spare > vsynctime / 4)
+	s -= s / 8 + 1;
+    else if (spare < vsynctime / 16)
+	s += s / 4 + 1;
+    cpu_cost_set (s);
+}
+
+/* in the frame, every 32 lines: the host is behind the beam, so a CPU that
+ * got too cheap doesn't drag out the frame until the last line notices */
+static void cpu_cost_check (void)
+{
+    frame_time_t late;
+
+    if (currprefs.m68k_speed != -1 || cpu_cost_scale >= CPU_COST_ONE || (vpos & 31) || !vpos)
+	return;
+    late = uae_gethrtime () - (vsyncmintime - vsynctime)
+	   - (frame_time_t) ((uae_s64) vsynctime * vpos / maxvpos);
+    if (late > vsynctime / 8)
+	cpu_cost_set (cpu_cost_scale + cpu_cost_scale / 2 + 1);
+}
+
 volatile frame_time_t vsynctime, vsyncmintime;
 
 #ifdef JIT
@@ -144,6 +188,7 @@ static uae_u32 sprclx[16], clxmask[16];
  */
 
 static int custom_wput_1 (unsigned int, uaecptr, uae_u32, int) REGPARAM;
+static void regtrace_frame (void);       /* EUAE_REGLOG, below */
 
 uae_u16 intena,intreq;
 uae_u16 dmacon;
@@ -920,13 +965,14 @@ STATIC_INLINE void toscr_3_aga (int nbits, int fm)
 	if (off1 == 3)
 	    off1 = 2;
 	offs -= off1 * 32;
-	/* offs is now in range [0,31]: replace uae_u64 shift with 32-bit ops.
-	   (t1<<32|t0) >> offs  ==  (t0 >> offs) | (t1 << (32 - offs))
-	   Special-case offs==0 to avoid undefined shift-by-32. */
+	/* (t1<<32|t0) >> offs with 32-bit ops. offs is in [0,63], not
+	   [0,31]: off1 3 is clamped to 2, and a big AGA scroll (Chaos
+	   Engine's BPLCON1 $88FF) shifted out in small pieces gets there -
+	   treating it as [0,31] made black dashes. */
 	for (i = 0; i < toscr_nr_planes; i += 2) {
 	    uae_u32 t0 = todisplay[i][off1];
 	    uae_u32 t1 = todisplay[i][off1 + 1];
-	    uae_u32 val = (offs == 0) ? t0 : ((t0 >> offs) | (t1 << (32 - offs)));
+	    uae_u32 val = offs == 0 ? t0 : offs < 32 ? (t0 >> offs) | (t1 << (32 - offs)) : t1 >> (offs - 32);
 	    outword[i] = (outword[i] << nbits) | (val & mask);
 	    aga_shift (todisplay[i], nbits, fm);
 	}
@@ -940,7 +986,7 @@ STATIC_INLINE void toscr_3_aga (int nbits, int fm)
 	for (i = 1; i < toscr_nr_planes; i += 2) {
 	    uae_u32 t0 = todisplay[i][off1];
 	    uae_u32 t1 = todisplay[i][off1 + 1];
-	    uae_u32 val = (offs == 0) ? t0 : ((t0 >> offs) | (t1 << (32 - offs)));
+	    uae_u32 val = offs == 0 ? t0 : offs < 32 ? (t0 >> offs) | (t1 << (32 - offs)) : t1 >> (offs - 32);
 	    outword[i] = (outword[i] << nbits) | (val & mask);
 	    aga_shift (todisplay[i], nbits, fm);
 	}
@@ -1180,9 +1226,9 @@ STATIC_INLINE void long_fetch_aga (int plane, int nwords, int weird_number_of_bi
 
 	    uae_u32 t0 = shiftbuffer[off1];
 	    uae_u32 t1 = shiftbuffer[off1 + 1];
-	    /* Replace uae_u64 shift with 32-bit equivalent: offs is in [0,31]
-	       after the off1 adjustment above. */
-	    uae_u32 tval = (offs == 0) ? t0 : ((t0 >> offs) | (t1 << (32 - offs)));
+	    /* (t1<<32|t0) >> offs with 32-bit ops; offs is in [0,63]
+	       (off1 3 clamped to 2), see toscr_3_aga */
+	    uae_u32 tval = offs == 0 ? t0 : offs < 32 ? (t0 >> offs) | (t1 << (32 - offs)) : t1 >> (offs - 32);
 	    t0 = tval & 0xFFFF;
 
 	    if (weird_number_of_bits && bits_left < 16) {
@@ -4292,6 +4338,7 @@ static void fpscounter (void)
 
 static void vsync_handler (void)
 {
+    regtrace_frame ();
     fpscounter ();
 
     if (!is_vsync ()
@@ -4521,6 +4568,12 @@ void hsync_handler (void)
 #ifdef JIT
     }
 #endif
+    if (is_lastline)
+	lastline_measure = 1;
+    else if (currprefs.m68k_speed != -1)
+	cpu_cost_scale = CPU_COST_ONE;
+    else
+	cpu_cost_check ();
 
     if ((bplcon0 & 4) && currprefs.gfx_linedbl)
 	notice_interlace_seen ();
@@ -4973,8 +5026,75 @@ uae_u32 REGPARAM2 custom_lget (uaecptr addr)
     return ((uae_u32)custom_wget (addr) << 16) | custom_wget (addr + 2);
 }
 
+/* EUAE_REGLOG=<file>: the custom register writes of the last frames, the
+ * CPU's (with its PC) and the copper's (with its IP), kept in a ring and
+ * appended to <file> when the GUI opens - for chasing display glitches */
+struct regtrace {
+    uae_u16 vpos, hpos, addr, value;
+    uae_u32 pc;                         /* bit 0 set: the CPU wrote it */
+};
+#define REGTRACE_N 131072
+static struct regtrace *regtrace;
+static unsigned int regtrace_pos;
+static int regtrace_cpu;
+
+static void regtrace_add (unsigned int hpos, unsigned int addr, unsigned int value, uae_u32 pc)
+{
+    struct regtrace *t = &regtrace[regtrace_pos++ % REGTRACE_N];
+    t->vpos = vpos; t->hpos = hpos; t->addr = addr; t->value = value; t->pc = pc;
+}
+
+static void regtrace_frame (void)
+{
+    static int init;
+    static unsigned int frame;
+
+    if (!init) {
+	init = 1;
+	if (getenv ("EUAE_REGLOG"))
+	    regtrace = calloc (REGTRACE_N, sizeof *regtrace);
+    }
+    if (regtrace)
+	regtrace_add (0, 0xffff, frame++ & 0xffff, 0);
+}
+
+void regtrace_dump (void)
+{
+    const char *name = getenv ("EUAE_REGLOG");
+    unsigned int i, n = regtrace_pos < REGTRACE_N ? regtrace_pos : REGTRACE_N;
+    FILE *f;
+
+    if (!regtrace || !name || !(f = fopen (name, "a")))
+	return;
+    fprintf (f, "=== %u writes\n", n);
+    for (i = regtrace_pos - n; i != regtrace_pos; i++) {
+	struct regtrace *t = &regtrace[i % REGTRACE_N];
+	if (t->addr == 0xffff)
+	    fprintf (f, "--- frame %u\n", t->value);
+	else
+	    fprintf (f, "%3u %3u %03X=%04X %s %08lX\n", t->vpos, t->hpos, t->addr, t->value,
+		     (t->pc & 1) ? "cpu" : "cop", (unsigned long) (t->pc & ~1));
+    }
+    fclose (f);
+    regtrace_pos = 0;
+
+    /* and the chip RAM as it is now, into <file>.chip */
+    {
+	char chipname[256];
+	sprintf (chipname, "%.240s.chip", name);
+	if ((f = fopen (chipname, "wb"))) {
+	    fwrite (chipmemory, 1, allocated_chipmem, f);
+	    fclose (f);
+	}
+    }
+}
+
 int REGPARAM2 custom_wput_1 (unsigned int hpos, uaecptr addr, uae_u32 value, int noget)
 {
+    if (regtrace)
+	regtrace_add (hpos, addr & 0x1FE, value & 0xffff,
+		      regtrace_cpu ? (m68k_getpc (&regs) | 1) : (cop_state.ip & ~1));
+
     addr &= 0x1FE;
     value &= 0xffff;
 #ifdef ACTION_REPLAY
@@ -5186,7 +5306,9 @@ void REGPARAM2 custom_wput (uaecptr addr, uae_u32 value)
     write_log ("%d:%d:wput: %04.4X %04.4X pc=%p\n", hpos, vpos, addr & 0x01fe, value & 0xffff, m68k_getpc (&regs));
 #endif
     sync_copper_with_cpu (hpos, 1);
+    regtrace_cpu = 1;
     custom_wput_1 (hpos, addr, value, 0);
+    regtrace_cpu = 0;
 }
 
 void REGPARAM2 custom_bput (uaecptr addr, uae_u32 value)

@@ -1910,6 +1910,7 @@ static void m68k_run_1 (void)
 
 	cycles &= cycles_mask_local;
 	cycles |= cycles_val_local;
+	cycles = (cycles * cpu_cost_scale) >> CPU_COST_SHIFT;
 	do_cycles (cycles);
 	if (r->spcflags) {
 	    if (do_specialties (cycles, r))
@@ -2085,6 +2086,7 @@ static void m68k_run_2p (void)
 	cycles = (*cpufunctbl[opcode])(opcode, r);
 	cycles &= cycles_mask_local;
 	cycles |= cycles_val_local;
+	cycles = (cycles * cpu_cost_scale) >> CPU_COST_SHIFT;
 	do_cycles (cycles);
 	if (r->spcflags) {
 	    if (do_specialties (cycles, r))
@@ -2109,6 +2111,7 @@ static void m68k_run_2 (void)
 
 	cycles &= cycles_mask_local;
 	cycles |= cycles_val_local;
+	cycles = (cycles * cpu_cost_scale) >> CPU_COST_SHIFT;
 	do_cycles (cycles);
 	if (r->spcflags) {
 	    if (do_specialties (cycles, r))
