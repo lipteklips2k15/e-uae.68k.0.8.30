@@ -541,6 +541,8 @@ static const int   cpu_levels[] = { 0, 1, 2, 3, 3, 4, 6 };     /* 4: level 3 + c
 /* CPU page: prefs m68k_speed (-1 max, 0 real, 1-20 fixed), cpu_idle,
    cpu_timecheck */
 static const char *speed_labels[] = { "Fastest (max)", "Real Amiga", "Fixed", 0 };
+/* the Drives page: which of the host's real drives an emulated one uses */
+static const char *real_labels[] = { "Real...", "Real DF0:", "Real DF1:", "Real DF2:", "Real DF3:", 0 };
 static const char *idle_labels[] = { "Keep running", "Sleep a little", "Sleep more", 0 };
 static const int   idle_values[] = { 0, 8, 2 };
 static const char *timecheck_labels[] = { "256 instr.", "1024 instr.", "4096 instr.", 0 };
@@ -903,7 +905,8 @@ static struct Gadget *build_page (struct Gadget *g)
             g = mk (g, BUTTON_KIND, GID_DF_INSERT + i, "Insert...", 314, y, 76, GH, 0, TAG_DONE);
             g = mk (g, BUTTON_KIND, GID_DF_EJECT + i, "Eject", 394, y, 68, GH, 0,
                     GA_Disabled, !currprefs.df[i][0], TAG_DONE);
-            g = mk (g, BUTTON_KIND, GID_DF_REAL + i, "Real", 466, y, 66, GH, 0, TAG_DONE);
+            g = mk (g, CYCLE_KIND, GID_DF_REAL + i, 0, 466, y, 100, GH, 0,
+                    GTCY_Labels, real_labels, GTCY_Active, hostdisk_unit (currprefs.df[i]) + 1, TAG_DONE);
         }
         y += 6;
         g = mk (g, CYCLE_KIND, GID_FLOPPYSPEED, "Speed", 60, y, 140, GH, PLACETEXT_LEFT,
@@ -1311,19 +1314,38 @@ static void gui_gadget (int id, int code)
         return;
     }
     if (id >= GID_DF_REAL && id < GID_DF_REAL + 4) {
-        int n = id - GID_DF_REAL;
-        char name[8];
-        sprintf (name, "realdf%d", n);
-        if (!hostdisk_present (n)) {
-            char msg[40];
-            sprintf (msg, "no disk in the real DF%d:", n);
-            gui_status (msg);
+        /* any emulated drive on any of the host's drives (realdf<u>) */
+        int n = id - GID_DF_REAL, u = (int) code - 1, k;
+        char name[8], msg[48];
+        if (u < 0) {                    /* "Real...": off the real drive */
+            if (hostdisk_unit (currprefs.df[n]) >= 0) {
+                disk_eject (n);
+                gui_status ("real floppy out");
+            }
+            show_page (PAGE_DRIVES);
             return;
         }
+        for (k = 0; k < 4; k++)
+            if (k != n && hostdisk_unit (currprefs.df[k]) == u) {
+                sprintf (msg, "the real DF%d: is in DF%d: already", u, k);
+                gui_status (msg);
+                show_page (PAGE_DRIVES);
+                return;
+            }
+        if (!hostdisk_present (u)) {
+            sprintf (msg, "no disk in the real DF%d:", u);
+            gui_status (msg);
+            show_page (PAGE_DRIVES);
+            return;
+        }
+        sprintf (name, "realdf%d", u);
+        if (currprefs.df[n][0])
+            disk_eject (n);
         strcpy (changed_prefs.df[n], name);
         disk_insert (n, name);
         show_page (PAGE_DRIVES);
-        gui_status ("real floppy in - the host's DOS keeps out of it");
+        sprintf (msg, "real DF%d: in DF%d: - the host's DOS keeps out", u, n);
+        gui_status (msg);
         return;
     }
     if (id >= GID_DF_EJECT && id < GID_DF_EJECT + 4) {
