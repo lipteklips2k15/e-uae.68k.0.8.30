@@ -770,6 +770,7 @@ static void dispose_aino (Unit *unit, a_inode **aip, a_inode *aino)
 	fsdb_dir_writeback (aino->parent);
 
     *aip = aino->sibling;
+    fsdb_free_caches (aino);
     xfree (aino->aname);
     if (aino->comment)
 	xfree (aino->comment);
@@ -1032,7 +1033,7 @@ static char *get_nname (Unit *unit, a_inode *base, char *rel,
 
     /* See if we have a file that has the same name as the aname we are
      * looking for.  */
-    found = fsdb_search_dir (base->nname, rel);
+    found = fsdb_search_dir (base, rel);
     if (found == 0)
 	return found;
     if (found == rel)
@@ -2125,9 +2126,21 @@ get_fileinfo (Unit *unit, dpacket packet, uaecptr info, a_inode *aino)
          BPTR lock;
         struct FileInfoBlock fib __attribute__((aligned(4)));
    
-         if ((lock = Lock (aino->nname, SHARED_LOCK))) {
-	     Examine (lock, &fib);
-	     UnLock (lock);
+         uae_u32 sz, bl, dd, mm, tt;
+
+         if (fsdb_cached_info (aino, &sz, &bl, &dd, &mm, &tt)) {
+	     /* the directory was just read: Examine's data from there */
+	     fib.fib_Size = sz;
+	     fib.fib_NumBlocks = bl;
+	     fib.fib_Date.ds_Days = dd;
+	     fib.fib_Date.ds_Minute = mm;
+	     fib.fib_Date.ds_Tick = tt;
+         } else {
+	     fsdb_perf.examines++;
+	     if ((lock = Lock (aino->nname, SHARED_LOCK))) {
+	         Examine (lock, &fib);
+	         UnLock (lock);
+	     }
          }
 	 put_long (info + 124, fib.fib_Size);
 	 put_long (info + 128, fib.fib_NumBlocks);
@@ -2205,33 +2218,26 @@ static void action_examine_object (Unit *unit, dpacket packet)
 
 static void populate_directory (Unit *unit, a_inode *base)
 {
-    DIR *d = opendir (base->nname);
+    int n = fsdb_dir_read (base), i;     /* fsdb.c's copy of the host directory */
     a_inode *aino;
 
-    if (!d)
-	return;
     for (aino = base->child; aino; aino = aino->sibling) {
 	base->locked_children++;
 	unit->total_locked_ainos++;
     }
     TRACE(("Populating directory, child %p, locked_children %d\n",
 	   base->child, base->locked_children));
-    for (;;) {
-	struct dirent *de;
+    for (i = 0; i < n; i++) {
+	const char *name = fsdb_dir_name (base, i);
 	uae_u32 err;
 
-	/* Find next file that belongs to the Amiga fs (skipping things
-	   like "..", "." etc.  */
-	do {
-	    de = my_readdir (d, &de_space);
-	} while (de && fsdb_name_invalid (de->d_name));
-	if (! de)
-	    break;
+	/* Skip what doesn't belong to the Amiga fs (".", "..", the db). */
+	if (!name || fsdb_name_invalid (name))
+	    continue;
 	/* This calls init_child_aino, which will notice that the parent is
 	   being ExNext()ed, and it will increment the locked counts.  */
-	aino = lookup_child_aino_for_exnext (unit, base, de->d_name, &err);
+	aino = lookup_child_aino_for_exnext (unit, base, (char *) name, &err);
     }
-    closedir (d);
 }
 
 static void do_examine (Unit *unit, dpacket packet, ExamineKey *ek, uaecptr info)
@@ -3540,6 +3546,14 @@ static uae_u32 REGPARAM2 exter_int_helper (TrapContext *context)
 static int handle_packet (Unit *unit, dpacket pck)
 {
     uae_s32 type = GET_PCK_TYPE (pck);
+    static int perf = -1;
+
+    if (perf < 0)
+	perf = getenv ("EUAE_PERF") != 0;
+    if (perf && (++fsdb_perf.packets & 255) == 0)
+	write_log ("FS: %lu packets, %lu directory scans (%lu entries), %lu stats, %lu examines, %lu fsdb opens\n",
+		   fsdb_perf.packets, fsdb_perf.dirscans, fsdb_perf.dirents, fsdb_perf.stats,
+		   fsdb_perf.examines, fsdb_perf.fsdbopens);
     PUT_PCK_RES2 (pck, 0);
     switch (type) {
      case ACTION_LOCATE_OBJECT: action_lock (unit, pck); break;
@@ -3590,6 +3604,13 @@ static int handle_packet (Unit *unit, dpacket pck)
      default:
 	write_log ("FILESYS: UNKNOWN PACKET %x\n", type);
 	return 0;
+    }
+    switch (type) {             /* fsdb.c's directory caches: stale now */
+     case ACTION_WRITE: case ACTION_FIND_WRITE: case ACTION_FIND_OUTPUT:
+     case ACTION_SET_FILE_SIZE: case ACTION_DELETE_OBJECT:
+     case ACTION_RENAME_OBJECT: case ACTION_CREATE_DIR: case ACTION_SET_PROTECT:
+     case ACTION_SET_COMMENT: case ACTION_SET_DATE: case ACTION_RENAME_DISK:
+	fsdb_changed ();
     }
     return 1;
 }

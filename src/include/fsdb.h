@@ -64,6 +64,10 @@ typedef struct a_inode_struct {
     unsigned long exnext_count;
     int  shlock;
     long db_offset;
+    /* a directory's caches (fsdb.c): its host entries and its _UAEFSDB.___ */
+    struct fsdb_dircache *dcache;
+    char *dbdata;
+    int dblen, dbstate;         /* dbstate 0: not read, 1: none, 2: dbdata */
     unsigned int dir:1;
     unsigned int elock:1;
     unsigned int has_dbentry:1;
@@ -82,12 +86,28 @@ extern char *build_aname(const char *d, const char *n);
 
 /* Filesystem-independent helpers */
 extern void     fsdb_clean_dir(a_inode *);
-extern char    *fsdb_search_dir(const char *dirname, char *rel);
+extern char    *fsdb_search_dir(a_inode *base, char *rel);
 extern void     fsdb_dir_writeback(a_inode *);
 extern int      fsdb_used_as_nname(a_inode *base, const char *);
 extern a_inode *fsdb_lookup_aino_aname(a_inode *base, const char *);
 extern a_inode *fsdb_lookup_aino_nname(a_inode *base, const char *);
 extern int      fsdb_exists(char *nname);
+
+/* EUAE_PERF: the host calls the virtual filesystem makes (filesys.c logs) */
+struct fsdb_perf {
+    unsigned long packets, dirscans, dirents, stats, examines, fsdbopens;
+};
+extern struct fsdb_perf fsdb_perf;
+
+/* the caches: a packet changed the filesystem; a directory's entries (for
+   ExNext); attributes and Examine data from them while fresh; freeing */
+extern void        fsdb_changed (void);
+extern int         fsdb_dir_read (a_inode *dir);
+extern const char *fsdb_dir_name (a_inode *dir, int i);
+extern int         fsdb_cached_attrs (a_inode *base, a_inode *aino);
+extern int         fsdb_cached_info (a_inode *aino, uae_u32 *size, uae_u32 *blocks,
+                                     uae_u32 *days, uae_u32 *mins, uae_u32 *ticks);
+extern void        fsdb_free_caches (a_inode *aino);
 
 /* Case-insensitive compare for Amiga names */
 #ifndef STATIC_INLINE

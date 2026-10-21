@@ -52,14 +52,17 @@ int fsdb_name_invalid(const char *n)
 int fsdb_exists(char *nname)
 {
     struct stat st;
+    fsdb_perf.stats++;
     return stat(nname, &st) != -1;
 }
 
 /* Fill attributes from host FS */
 int fsdb_fill_file_attrs(a_inode *base, a_inode *aino)
 {
-    (void)base;
     struct stat st;
+    if (fsdb_cached_attrs(base, aino))  /* from the directory just read */
+        return 1;
+    fsdb_perf.stats++;
     if (stat(aino->nname, &st) == -1) return 0;
     aino->dir = S_ISDIR(st.st_mode) ? 1 : 0;
     aino->amigaos_mode =
