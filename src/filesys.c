@@ -1669,6 +1669,9 @@ static void notify_send (Unit *unit, Notify *n)
     uaecptr nr = n->notifyrequest;
     int flags = get_long (nr + 12);
 
+    if (getenv ("EUAE_FSLOG"))
+	write_log ("FSLOG: notify %s: request %08x flags %x %s %08x signal %d\n", n->fullname, nr, flags,
+		   (flags & NRF_SEND_MESSAGE) ? "port" : "task", get_long (nr + 16), get_byte (nr + 20));
     if (flags & NRF_SEND_MESSAGE) {
 	if (!(flags & NRF_WAIT_REPLY) || ((flags & NRF_WAIT_REPLY) && !(flags & NRF_MAGIC))) {
 	    uae_NotificationHack (unit->port, nr);
@@ -3546,10 +3549,12 @@ static uae_u32 REGPARAM2 exter_int_helper (TrapContext *context)
 static int handle_packet (Unit *unit, dpacket pck)
 {
     uae_s32 type = GET_PCK_TYPE (pck);
-    static int perf = -1;
+    static int perf = -1, fslog = -1;
 
     if (perf < 0)
 	perf = getenv ("EUAE_PERF") != 0;
+    if (fslog < 0)
+	fslog = getenv ("EUAE_FSLOG") ? atoi (getenv ("EUAE_FSLOG")) : 0;
     if (perf && (++fsdb_perf.packets & 255) == 0)
 	write_log ("FS: %lu packets, %lu directory scans (%lu entries), %lu stats, %lu examines, %lu fsdb opens\n",
 		   fsdb_perf.packets, fsdb_perf.dirscans, fsdb_perf.dirents, fsdb_perf.stats,
@@ -3600,9 +3605,11 @@ static int handle_packet (Unit *unit, dpacket pck)
      case ACTION_MAKE_LINK:
      case ACTION_READ_LINK:
      case ACTION_FORMAT:
-	 return 0;
+	if (fslog > 0)
+	    write_log ("FSLOG: packet %d not supported\n", type);
+	return 0;
      default:
-	write_log ("FILESYS: UNKNOWN PACKET %x\n", type);
+	write_log ("FILESYS: UNKNOWN PACKET %x (%d)\n", type, type);
 	return 0;
     }
     switch (type) {             /* fsdb.c's directory caches: stale now */
@@ -3611,6 +3618,15 @@ static int handle_packet (Unit *unit, dpacket pck)
      case ACTION_RENAME_OBJECT: case ACTION_CREATE_DIR: case ACTION_SET_PROTECT:
      case ACTION_SET_COMMENT: case ACTION_SET_DATE: case ACTION_RENAME_DISK:
 	fsdb_changed ();
+    }
+    if (fslog > 1 || (fslog && GET_PCK_RES2 (pck))) {  /* EUAE_FSLOG: failed packets, 2: all */
+	uae_u32 nameptr = type == ACTION_LOCATE_OBJECT ? GET_PCK_ARG2 (pck)
+	    : type == ACTION_FIND_INPUT || type == ACTION_FIND_OUTPUT || type == ACTION_FIND_WRITE
+	      ? GET_PCK_ARG3 (pck) : 0;
+	write_log ("FSLOG: packet %d -> res1 %d res2 %d, args %x %x %x %x%s%s\n", type,
+		   GET_PCK_RES1 (pck), GET_PCK_RES2 (pck), GET_PCK_ARG1 (pck), GET_PCK_ARG2 (pck),
+		   GET_PCK_ARG3 (pck), GET_PCK_ARG4 (pck), nameptr ? ", name " : "",
+		   nameptr ? bstr1 (nameptr << 2) : "");
     }
     return 1;
 }

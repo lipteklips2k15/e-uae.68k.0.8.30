@@ -780,6 +780,59 @@ static uae_u8 *z3fastmem_xlate (uaecptr addr) REGPARAM;
 static uae_u32 z3fastmem_start; /* Determined by the OS */
 static uae_u8 *z3fastmem;
 
+/* EUAE_WATCH=<hex address> (with EUAE_NODIRECT, so writes come here): every
+   write to the 8 bytes there is logged with the CPU's PC - who writes it */
+static uae_u32 z3watch = 1;
+
+static void z3watch_check (uaecptr a, int size, uae_u32 v)
+{
+    if (z3watch == 1) {
+	const char *e = getenv ("EUAE_WATCH");
+	z3watch = e ? strtoul (e, 0, 16) : 0;
+	if (z3watch)
+	    write_log ("WATCH: writes to %08x..%08x\n", z3watch, z3watch + 7);
+    }
+    if (z3watch && a + size > z3watch && a < z3watch + 8) {
+	uaecptr sp = m68k_areg (&regs, 7);
+	int i;
+	write_log ("WATCH: %d-byte write %08x at %08x, pc %08x, vpos %d\n", size, v, a,
+		   m68k_getpc (&regs), vpos);
+	write_log ("WATCH:   a0 %08x a1 %08x a2 %08x a4 %08x a5 %08x a6 %08x d0 %08x d1 %08x\n",
+		   m68k_areg (&regs, 0), m68k_areg (&regs, 1), m68k_areg (&regs, 2), m68k_areg (&regs, 4),
+		   m68k_areg (&regs, 5), m68k_areg (&regs, 6), m68k_dreg (&regs, 0), m68k_dreg (&regs, 1));
+	write_log ("WATCH:   sp %08x:", sp);
+	for (i = 0; i < 16; i++)
+	    write_log (" %08x", get_long (sp + 4 * i));
+	write_log ("\n");
+	for (i = -1; i < 16; i++) {     /* library bases in a6 and on the stack: name, vectors */
+	    uaecptr b = i < 0 ? m68k_areg (&regs, 6) : get_long (sp + 4 * i), n;
+	    char name[40];
+	    int k;
+	    if (!valid_address (b - 140, 160) || get_byte (b + 8) != 9)    /* NT_LIBRARY */
+		continue;
+	    n = get_long (b + 10);
+	    if (!valid_address (n, 32))
+		continue;
+	    for (k = 0; k < 39 && (name[k] = get_byte (n + k)); k++)
+		;
+	    name[k] = 0;
+	    write_log ("WATCH:   library %08x \"%s\": -30 -> %04x %08x, -132 -> %04x %08x\n", b, name,
+		       get_word (b - 30), get_long (b - 28), get_word (b - 132), get_long (b - 130));
+	}
+	{   /* the code around a PC in RAM (or EUAE_WATCHCODE), for disassembling */
+	    uaecptr pc = getenv ("EUAE_WATCHCODE") ? strtoul (getenv ("EUAE_WATCHCODE"), 0, 16) : m68k_getpc (&regs), c;
+	    if (pc >= z3fastmem_start && pc < z3fastmem_start + allocated_z3fastmem) {
+		for (c = (pc & ~15) - 0x100; c < (pc & ~15) + 0x60; c += 16) {
+		    write_log ("WATCH:   code %08x:", c);
+		    for (i = 0; i < 16; i += 2)
+			write_log (" %04x", get_word (c + i));
+		    write_log ("\n");
+		}
+	    }
+	}
+    }
+}
+
 uae_u32 REGPARAM2 z3fastmem_lget (uaecptr addr)
 {
     uae_u8 *m;
@@ -808,6 +861,7 @@ uae_u32 REGPARAM2 z3fastmem_bget (uaecptr addr)
 void REGPARAM2 z3fastmem_lput (uaecptr addr, uae_u32 l)
 {
     uae_u8 *m;
+    z3watch_check (addr, 4, l);
     addr -= z3fastmem_start & z3fastmem_mask;
     addr &= z3fastmem_mask;
     m = z3fastmem + addr;
@@ -817,6 +871,7 @@ void REGPARAM2 z3fastmem_lput (uaecptr addr, uae_u32 l)
 void REGPARAM2 z3fastmem_wput (uaecptr addr, uae_u32 w)
 {
     uae_u8 *m;
+    z3watch_check (addr, 2, w);
     addr -= z3fastmem_start & z3fastmem_mask;
     addr &= z3fastmem_mask;
     m = z3fastmem + addr;
@@ -825,6 +880,7 @@ void REGPARAM2 z3fastmem_wput (uaecptr addr, uae_u32 w)
 
 void REGPARAM2 z3fastmem_bput (uaecptr addr, uae_u32 b)
 {
+    z3watch_check (addr, 1, b);
     addr -= z3fastmem_start & z3fastmem_mask;
     addr &= z3fastmem_mask;
     z3fastmem[addr] = b;

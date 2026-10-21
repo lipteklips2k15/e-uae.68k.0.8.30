@@ -15,6 +15,9 @@ param([int]$Seconds = 420, [ValidateSet('old', 'os32')][string]$Card = 'old', [s
       [switch]$NoDirect,       # E-UAE without direct RAM access (EUAE_NODIRECT), for speed comparisons
       [switch]$Perf,           # frames per second into euae.log (EUAE_PERF)
       [switch]$RegLog,         # custom register writes of the last frames into share/regs.txt when the GUI opens (EUAE_REGLOG)
+      [switch]$FsLog,          # the virtual filesystem's packets (failed and all) into euae.log (EUAE_FSLOG 2)
+      [string]$Watch = '',     # hex address in Z3 fast RAM: its writes into euae.log (EUAE_WATCH; use with -NoDirect)
+      [string]$WatchCode = '', # hex address: the code there is dumped at a watch hit (EUAE_WATCHCODE)
       [string]$GuestConfig = 'euae.uaerc')  # E-UAE's config in share/guest (ags.uaerc: boot the AGS image)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -70,6 +73,9 @@ $lines += "Copy DIZ:guest/rtgtest $g/C/rtgtest",
     $(if ($NoDirect) { 'SetEnv EUAE_NODIRECT 1' } else { 'UnSetEnv EUAE_NODIRECT' }),
     $(if ($Perf) { 'SetEnv EUAE_PERF 1' } else { 'UnSetEnv EUAE_PERF' }),
     $(if ($RegLog) { 'SetEnv EUAE_REGLOG DIZ:regs.txt' } else { 'UnSetEnv EUAE_REGLOG' }),
+    $(if ($FsLog) { 'SetEnv EUAE_FSLOG 2' } else { 'UnSetEnv EUAE_FSLOG' }),
+    $(if ($Watch) { "SetEnv EUAE_WATCH $Watch" } else { 'UnSetEnv EUAE_WATCH' }),
+    $(if ($WatchCode) { "SetEnv EUAE_WATCHCODE $WatchCode" } else { 'UnSetEnv EUAE_WATCHCODE' }),
     'CD DIZ:', 'Stack 65536',
     "DIZ:uae -f DIZ:guest/$GuestConfig >DIZ:run.log",
     'Echo uae-exited >DIZ:done.txt'
